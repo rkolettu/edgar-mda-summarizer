@@ -102,6 +102,8 @@ def extract_item7(text: str) -> str | None:
     return best if len(best) >= MIN_SECTION_CHARS else None
 
 
+# Cached so the client outlives each call: genai.Client closes its HTTP connection when garbage-collected.
+@lru_cache(maxsize=1)
 def get_client() -> genai.Client:
     if not os.environ.get("GEMINI_API_KEY"):
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY environment variable is not set.")
