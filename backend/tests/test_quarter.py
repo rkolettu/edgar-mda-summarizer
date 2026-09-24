@@ -67,3 +67,10 @@ def test_quarter_failure_degrades_gracefully(client, fake_gemini):
     body = get(client)
     assert body["latest_quarter"] is None
     assert any("model overloaded" in w for w in body["warnings"])
+
+
+def test_quarter_without_item2_is_omitted(client, fake_sec):
+    fake_sec.add_text(APPLE_10Q_URL, "<p>10-Q with no MD&A section.</p>")
+    body = get(client)
+    assert body["latest_quarter"] is None
+    assert any("Could not isolate Item 2" in w for w in body["warnings"])

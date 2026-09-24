@@ -46,7 +46,17 @@ def test_every_sec_request_sends_user_agent(client, fake_sec):
     client.get("/api/summarize", params={"ticker": "AAPL"})
     assert fake_sec.calls
     for _, headers in fake_sec.calls:
-        assert headers["User-Agent"] == "RishabKolettu InvestmentResearch (rishab@example.com)"
+        assert headers["User-Agent"] == "Test Research (test@example.com)"
+
+
+def test_missing_sec_user_agent_fails_before_request(fake_sec, monkeypatch):
+    from fastapi import HTTPException
+
+    monkeypatch.delenv("SEC_USER_AGENT")
+    with pytest.raises(HTTPException, match="SEC_USER_AGENT") as exc:
+        sec.sec_get(sec.TICKERS_URL)
+    assert exc.value.status_code == 500
+    assert fake_sec.calls == []
 
 
 def test_gemini_gets_item7_not_table_of_contents(client, fake_gemini):
