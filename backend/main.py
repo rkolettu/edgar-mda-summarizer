@@ -38,14 +38,47 @@ def summarize_ticker(ticker: str = Query(..., min_length=1, max_length=100)):
     return json_errors(run_pipeline, ticker)
 
 
-def load_financials(cik: int, report_date: str, warnings: list[str]) -> dict | None:
+def load_companyfacts(cik: int) -> dict:
     try:
-        result = financials.build_financials(sec.get_companyfacts(cik), report_date)
+        return sec.get_companyfacts(cik)
     except HTTPException:
-        result = None
+        return {}
+
+
+def load_financials(companyfacts: dict, report_date: str, warnings: list[str]) -> dict | None:
+    result = financials.build_financials(companyfacts, report_date)
     if result is None:
         warnings.append("No XBRL financial data found; KPIs and trend charts are unavailable.")
     return result
+
+
+def find_newer_10q(submissions: dict, tenk: dict) -> dict | None:
+    tenqs = sec.find_filings(submissions, "10-Q", limit=1)
+    return tenqs[0] if tenqs and tenqs[0]["filing_date"] > tenk["filing_date"] else None
+
+
+def build_latest_quarter(company_name: str, ticker: str, cik: int, tenq_filing: dict | None, companyfacts: dict, warnings: list[str]) -> dict | None:
+    if tenq_filing is None:
+        return None
+    try:
+        tenq = sec.load_10q(cik, tenq_filing)
+        result = analysis.summarize_quarter(company_name, ticker, tenq)
+    except HTTPException as exc:
+        warnings.append(f"Latest 10-Q update unavailable: {exc.detail}")
+        return None
+    return {
+        "filing": {
+            "form": tenq["form"],
+            "filing_date": tenq["filing_date"],
+            "report_date": tenq["report_date"],
+            "document_url": tenq["document_url"],
+            "mdna_source": tenq["mdna"]["source"],
+        },
+        "metrics": financials.build_quarter(companyfacts, tenq["report_date"]),
+        "highlights": verify.annotate(
+            [h.model_dump() for h in result.highlights], verify.normalize(tenq["mdna"]["text"])
+        ),
+    }
 
 
 def filing_source(tenk: dict) -> str:
@@ -98,8 +131,12 @@ def run_pipeline(query: str) -> dict:
 
     company_name = submissions.get("name") or company["name"]
     result = analysis.summarize(company_name, ticker, mdna["text"], risk_factors)
-    fin = load_financials(cik, current["report_date"], warnings)
+    companyfacts = load_companyfacts(cik)
+    fin = load_financials(companyfacts, current["report_date"], warnings)
     changes = build_changes(company_name, ticker, cik, current, prior_filing, warnings)
+    latest_quarter = build_latest_quarter(
+        company_name, ticker, cik, find_newer_10q(submissions, current), companyfacts, warnings
+    )
 
     # Gemini reports chart values in billions; the API returns raw USD everywhere.
     segments = [{"name": p.name, "value": p.value * 1e9} for p in result.charts.revenue_segments]
@@ -140,6 +177,7 @@ def run_pipeline(query: str) -> dict:
         },
         "financials": fin,
         "changes": changes,
+        "latest_quarter": latest_quarter,
         "warnings": warnings,
     }
 

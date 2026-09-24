@@ -106,6 +106,25 @@ APPLE_FILINGS = [
 APPLE_10K_URL = "https://www.sec.gov/Archives/edgar/data/320193/000032019325000079/aapl-20250927.htm"
 APPLE_PRIOR_10K_URL = "https://www.sec.gov/Archives/edgar/data/320193/000032019324000123/aapl-20240928.htm"
 
+APPLE_10Q_URL = "https://www.sec.gov/Archives/edgar/data/320193/000032019326000006/aapl-20251227.htm"
+
+TENQ_MDNA_BODY = (
+    "Total net sales increased 11% to $138.4 billion during the first quarter of 2026 compared to the same quarter in 2025. "
+    "The Company repurchased $24.0 billion of its common stock during the quarter. "
+) * 40
+
+
+def ten_q_html(mdna_body: str = TENQ_MDNA_BODY) -> str:
+    return f"""<html><body>
+    <p>PART I Item 1. Financial Statements 1 Item 2. Management's Discussion and Analysis 12 Item 3. Quantitative 20 Item 4. Controls and Procedures 21</p>
+    <p>Item 1. Financial Statements</p><p>Condensed statements.</p>
+    <p>Item 2. Management's Discussion and Analysis of Financial Condition and Results of Operations</p>
+    <p>{mdna_body}</p>
+    <p>Item 3. Quantitative and Qualitative Disclosures About Market Risk</p><p>No material changes.</p>
+    <p>Item 4. Controls and Procedures</p>
+    </body></html>"""
+
+
 PRIOR_MDNA_BODY = (
     "Net sales increased 2% to $391.0 billion. "
     "The Company experienced supply constraints for certain iPhone models during the first quarter. "
@@ -128,6 +147,19 @@ class FakeGemini:
         name = config.response_schema.__name__
         self.calls.append({"model": model, "contents": contents, "config": config, "schema": name})
         return SimpleNamespace(text=json.dumps(self.responses[name]))
+
+
+def default_quarter():
+    return {
+        "highlights": [
+            {
+                "headline": "Double-Digit Growth Returns",
+                "detail": "Net sales rose 11% to $138.4B.",
+                "evidence": "Total net sales increased 11% to $138.4 billion during the first quarter of 2026 compared to the same quarter in 2025.",
+            },
+            {"headline": "Buybacks Continue", "detail": "Repurchased $24.0B.", "evidence": "The Company bought back $30 billion of stock."},
+        ]
+    }
 
 
 def default_changes():
@@ -185,6 +217,7 @@ def fake_sec(monkeypatch):
     )
     fake.add_text(APPLE_10K_URL, ten_k_html())
     fake.add_text(APPLE_PRIOR_10K_URL, ten_k_html(PRIOR_MDNA_BODY, PRIOR_RISK_BODY))
+    fake.add_text(APPLE_10Q_URL, ten_q_html())
     monkeypatch.setattr(sec.requests, "get", fake.get)
     sec.load_companies.cache_clear()
     sec.load_ticker_map.cache_clear()
@@ -198,6 +231,7 @@ def fake_gemini(monkeypatch):
     fake = FakeGemini()
     fake.responses["Analysis"] = default_analysis()
     fake.responses["Changes"] = default_changes()
+    fake.responses["QuarterUpdate"] = default_quarter()
     monkeypatch.setattr(analysis, "get_client", lambda: fake)
     return fake
 

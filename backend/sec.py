@@ -27,6 +27,8 @@ ITEM1A_START = re.compile(rf"item\s*1a{SEP}risk\s+factors", re.IGNORECASE)
 ITEM1A_END = re.compile(
     rf"item\s*1b{SEP}unresolved\s+staff|item\s*1c{SEP}cybersecurity|item\s*2{SEP}properties", re.IGNORECASE
 )
+TENQ_MDNA_START = re.compile(rf"item\s*2{SEP}management'?s\s+discussion\s+and\s+analysis", re.IGNORECASE)
+TENQ_MDNA_END = re.compile(rf"item\s*3{SEP}quantitative|item\s*4{SEP}controls\s+and\s+procedures", re.IGNORECASE)
 ANNUAL_REPORT_MDNA_START = re.compile(
     r"management'?s\s+discussion\s+and\s+analysis\s+of\s+(?:the\s+)?(?:consolidated\s+)?(?:financial\s+condition|results)",
     re.IGNORECASE,
@@ -231,6 +233,17 @@ def load_10k(cik: int, filing: dict) -> dict:
         "document_url": document_url,
         "mdna": extract_mdna(cik, filing, text, document_url),
         "risk_factors": extract_risk_factors(text),
+    }
+
+
+def load_10q(cik: int, filing: dict) -> dict:
+    document_url = archive_url(cik, filing["accession_number"], filing["primary_doc"])
+    text = html_to_text(sec_get(document_url).text)
+    mdna = extract_section(text, TENQ_MDNA_START, TENQ_MDNA_END)
+    return {
+        **filing,
+        "document_url": document_url,
+        "mdna": {"text": mdna or text[:FALLBACK_CHARS], "source": "item2" if mdna else "fallback", "url": document_url},
     }
 
 

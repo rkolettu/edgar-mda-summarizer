@@ -2,7 +2,7 @@ import { ArrowDownRight, ArrowUpRight } from 'lucide-react'
 import { STATUS } from '../lib/colors'
 import { fiscalYearLabel, formatEps, formatPct, formatSignedPct, formatUsd } from '../lib/format'
 
-function Delta({ value, suffix = 'YoY' }) {
+export function Delta({ value, suffix = 'YoY' }) {
   if (value === null || value === undefined) return null
   const up = value >= 0
   const Icon = up ? ArrowUpRight : ArrowDownRight
@@ -14,7 +14,7 @@ function Delta({ value, suffix = 'YoY' }) {
   )
 }
 
-function Tile({ label, value, sub }) {
+export function Tile({ label, value, sub }) {
   return (
     <div className="min-w-0 rounded-lg border border-line bg-panel px-4 py-3.5">
       <div className="truncate text-[11px] font-medium tracking-wide text-muted uppercase">{label}</div>

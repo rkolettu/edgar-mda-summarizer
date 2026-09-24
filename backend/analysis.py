@@ -179,3 +179,33 @@ def compare(company_name: str, ticker: str, latest: dict, prior: dict) -> Change
         if change.change_type not in CHANGE_TYPES:
             change.change_type = "changed"
     return result
+
+
+QUARTER_PROMPT = """
+You are an elite buy-side equity analyst reviewing a company's latest 10-Q, filed after its annual 10-K. Output a strict JSON response.
+
+CRITICAL RULES:
+1. WHAT IS NEW: Provide 3 to 4 highlights on what has developed since the annual report: the quarter's revenue and margin trends versus the prior-year quarter, updated guidance or outlook, capital return activity, and any new risks or one-time items.
+2. DEPTH: Each highlight needs a punchy "headline" and a "detail" paragraph (2-3 sentences) with specific numbers and year-over-year changes.
+3. ABBREVIATE NUMBERS: Convert large numbers to billions/millions (e.g., "$109.1B").
+4. CITE EVIDENCE: "evidence" is one sentence copied VERBATIM from the 10-Q text. Do not paraphrase or change any number; the quote is checked against the filing.
+
+Output EXACTLY this JSON format:
+{
+  "highlights": [
+    { "headline": "...", "detail": "...", "evidence": "..." }
+  ]
+}
+"""
+
+
+class QuarterUpdate(BaseModel):
+    highlights: list[Insight]
+
+
+def summarize_quarter(company_name: str, ticker: str, tenq: dict) -> QuarterUpdate:
+    contents = (
+        f"Company: {company_name} ({ticker})\n\n"
+        f"--- BEGIN 10-Q MD&A (quarter ended {tenq['report_date']}) ---\n{tenq['mdna']['text']}\n--- END 10-Q MD&A ---"
+    )
+    return generate(QUARTER_PROMPT, contents, QuarterUpdate)

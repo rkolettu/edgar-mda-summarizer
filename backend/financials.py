@@ -140,3 +140,51 @@ def build_financials(companyfacts: dict, report_date: str) -> dict | None:
     ]
 
     return {"years": years, "kpis": kpis, "capital_deployment": capital_deployment}
+
+
+QUARTER_FORMS = {"10-Q", "10-Q/A"}
+QUARTER_DAYS = (80, 100)
+SAME_QUARTER_LAST_YEAR_DAYS = (357, 371)
+QUARTER_CONCEPTS = {
+    "revenue": (DURATION_CONCEPTS["revenue"], "USD"),
+    "net_income": (DURATION_CONCEPTS["net_income"], "USD"),
+    "eps_diluted": (PER_SHARE_CONCEPTS["eps_diluted"], "USD/shares"),
+}
+
+
+def _quarter_entries(facts: dict, tags: list[str], unit: str) -> dict[str, dict]:
+    merged: dict[str, dict] = {}
+    for tag in tags:
+        best: dict[str, dict] = {}
+        for e in facts.get("us-gaap", {}).get(tag, {}).get("units", {}).get(unit, []):
+            if e.get("form") not in QUARTER_FORMS or "start" not in e:
+                continue
+            if not QUARTER_DAYS[0] <= _days(e["start"], e["end"]) <= QUARTER_DAYS[1]:
+                continue
+            prev = best.get(e["end"])
+            if prev is None or e.get("filed", "") > prev.get("filed", ""):
+                best[e["end"]] = e
+        for end, e in best.items():
+            merged.setdefault(end, e)
+    return merged
+
+
+def build_quarter(companyfacts: dict, period_end: str) -> dict | None:
+    facts = companyfacts.get("facts", {})
+    result: dict = {"period_end": period_end, "fiscal_period": None, "fiscal_year": None}
+    found = False
+    for key, (tags, unit) in QUARTER_CONCEPTS.items():
+        entries = _quarter_entries(facts, tags, unit)
+        current = entries.get(period_end)
+        prior = next(
+            (e for end, e in entries.items() if SAME_QUARTER_LAST_YEAR_DAYS[0] <= _days(end, period_end) <= SAME_QUARTER_LAST_YEAR_DAYS[1]),
+            None,
+        )
+        result[key] = current["val"] if current else None
+        result[f"{key}_prior"] = prior["val"] if prior else None
+        result[f"{key}_growth"] = _growth(result[key], result[f"{key}_prior"])
+        if current:
+            found = True
+            result["fiscal_period"] = result["fiscal_period"] or current.get("fp")
+            result["fiscal_year"] = result["fiscal_year"] or current.get("fy")
+    return result if found else None

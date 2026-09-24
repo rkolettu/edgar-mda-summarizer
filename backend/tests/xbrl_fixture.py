@@ -48,12 +48,18 @@ def apple_companyfacts() -> dict:
     revenue_new.append(quarter("2025-06-29", "2025-09-27", 102.5 * B))
     revenue_new.append({**annual("2025-09-27", 102.5 * B), "start": "2025-06-29"})
 
+    # Fiscal Q1 2026 (13 weeks to 2025-12-27) vs Q1 2025, as reported in the Q1 2026 10-Q, plus a 3-month YTD twin.
+    q = lambda start, end, val, fy=2026: {"start": start, "end": end, "val": val, "form": "10-Q", "filed": "2026-01-30", "fy": fy, "fp": "Q1"}  # noqa: E731
+    revenue_new += [q("2025-09-28", "2025-12-27", 138.4 * B), q("2024-09-29", "2024-12-28", 124.3 * B)]
+    revenue_new.append({**q("2025-06-29", "2025-12-27", 240.9 * B), "fp": "Q1"})
+
     us_gaap = {
         "SalesRevenueNet": concept([annual("2019-09-28", 260.2 * B), annual("2020-09-26", 274.5 * B)]),
         "RevenueFromContractWithCustomerExcludingAssessedTax": concept(revenue_new),
         "GrossProfit": concept([annual(e, v * B) for e, v in {"2021-09-25": 152.8, "2022-09-24": 170.8, "2023-09-30": 169.1, "2024-09-28": 180.7, "2025-09-27": 195.2}.items()]),
         "OperatingIncomeLoss": concept([annual(e, v * B) for e, v in {"2021-09-25": 108.9, "2022-09-24": 119.4, "2023-09-30": 114.3, "2024-09-28": 123.2, "2025-09-27": 133.1}.items()]),
-        "NetIncomeLoss": concept([annual(e, v * B) for e, v in {"2021-09-25": 94.7, "2022-09-24": 99.8, "2023-09-30": 97.0, "2024-09-28": 93.7, "2025-09-27": 112.0}.items()]),
+        "NetIncomeLoss": concept([annual(e, v * B) for e, v in {"2021-09-25": 94.7, "2022-09-24": 99.8, "2023-09-30": 97.0, "2024-09-28": 93.7, "2025-09-27": 112.0}.items()]
+                                 + [q("2025-09-28", "2025-12-27", 42.1 * B), q("2024-09-29", "2024-12-28", 36.3 * B)]),
         "NetCashProvidedByUsedInOperatingActivities": concept([annual(e, v * B) for e, v in {"2021-09-25": 104.0, "2022-09-24": 122.2, "2023-09-30": 110.5, "2024-09-28": 118.3, "2025-09-27": 111.5}.items()]),
         "PaymentsToAcquirePropertyPlantAndEquipment": concept([annual(e, v * B) for e, v in {"2021-09-25": 11.1, "2022-09-24": 10.7, "2023-09-30": 11.0, "2024-09-28": 9.4, "2025-09-27": 12.7}.items()]),
         "PaymentsForRepurchaseOfCommonStock": concept([annual(e, v * B) for e, v in {"2023-09-30": 77.6, "2024-09-28": 95.0, "2025-09-27": 90.7}.items()]),

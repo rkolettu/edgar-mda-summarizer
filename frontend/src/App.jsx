@@ -4,6 +4,7 @@ import AnalysisSection from './components/AnalysisSection'
 import CapitalDeploymentChart from './components/CapitalDeploymentChart'
 import ChangesSection from './components/ChangesSection'
 import KpiStrip from './components/KpiStrip'
+import LatestQuarter from './components/LatestQuarter'
 import LoadingState from './components/LoadingState'
 import RevenueMixChart from './components/RevenueMixChart'
 import SearchHeader from './components/SearchHeader'
@@ -175,6 +176,7 @@ export default function App() {
                 </div>
               </>
             )}
+            {data.latest_quarter && <LatestQuarter quarter={data.latest_quarter} />}
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
               <div className="space-y-6">
                 {SECTIONS.map((s) => (
@@ -188,7 +190,7 @@ export default function App() {
                 ))}
                 {data.changes && <ChangesSection changes={data.changes} />}
               </div>
-              <aside className="space-y-6 lg:sticky lg:top-24 lg:self-start">
+              <aside className="space-y-6">
                 <RevenueMixChart data={data.charts?.revenue_segments ?? []} check={data.checks?.segments} />
                 <CapitalDeploymentChart
                   data={data.charts?.capital_deployment ?? []}
