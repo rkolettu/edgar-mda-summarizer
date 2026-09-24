@@ -49,7 +49,7 @@ def test_kpis(apple):
 
 def test_capital_deployment_skips_missing_and_zero(apple):
     names = [d["name"] for d in apple["capital_deployment"]]
-    assert names == ["Share Buybacks", "Dividends", "Capex", "R&D"]
+    assert names == ["Share Buybacks", "Dividends", "Capex"]
 
 
 def test_missing_values_are_none_not_errors(apple):

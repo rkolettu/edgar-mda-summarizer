@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from functools import lru_cache
 from urllib.parse import urljoin
@@ -8,7 +9,6 @@ import requests
 from bs4 import BeautifulSoup
 from fastapi import HTTPException
 
-SEC_HEADERS = {"User-Agent": "RishabKolettu InvestmentResearch (rishab@example.com)"}
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{padded_cik}.json"
 COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{padded_cik}.json"
@@ -16,7 +16,6 @@ ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession_no_dashe
 FILING_INDEX_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession_no_dashes}/{accession}-index.htm"
 REQUEST_TIMEOUT = 30
 
-FALLBACK_CHARS = 100_000
 RISK_FACTORS_CHARS = 80_000
 MIN_SECTION_CHARS = 2_000
 
@@ -47,8 +46,14 @@ CROSS_REFERENCE = re.compile(
 
 
 def sec_get(url: str) -> requests.Response:
+    user_agent = os.environ.get("SEC_USER_AGENT", "").strip()
+    if not user_agent:
+        raise HTTPException(
+            status_code=500,
+            detail="SEC_USER_AGENT is not configured. Set it to an application name and real contact email.",
+        )
     try:
-        resp = requests.get(url, headers=SEC_HEADERS, timeout=REQUEST_TIMEOUT)
+        resp = requests.get(url, headers={"User-Agent": user_agent}, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
     except requests.RequestException as exc:
         raise HTTPException(status_code=502, detail=f"SEC request failed for {url}: {exc}") from exc
@@ -240,10 +245,12 @@ def load_10q(cik: int, filing: dict) -> dict:
     document_url = archive_url(cik, filing["accession_number"], filing["primary_doc"])
     text = html_to_text(sec_get(document_url).text)
     mdna = extract_section(text, TENQ_MDNA_START, TENQ_MDNA_END)
+    if mdna is None:
+        raise HTTPException(status_code=422, detail="Could not isolate Item 2 MD&A in the 10-Q.")
     return {
         **filing,
         "document_url": document_url,
-        "mdna": {"text": mdna or text[:FALLBACK_CHARS], "source": "item2" if mdna else "fallback", "url": document_url},
+        "mdna": {"text": mdna, "source": "item2", "url": document_url},
     }
 
 
@@ -257,6 +264,7 @@ def extract_mdna(cik: int, filing: dict, filing_text: str, document_url: str) ->
     if exhibit_url:
         exhibit_text = html_to_text(sec_get(exhibit_url).text)
         mdna = extract_section(exhibit_text, ANNUAL_REPORT_MDNA_START, ANNUAL_REPORT_MDNA_END)
-        return {"text": mdna or exhibit_text[:FALLBACK_CHARS], "source": "exhibit13", "url": exhibit_url}
+        if mdna:
+            return {"text": mdna, "source": "exhibit13", "url": exhibit_url}
 
-    return {"text": filing_text[:FALLBACK_CHARS], "source": "fallback", "url": document_url}
+    raise HTTPException(status_code=422, detail="Could not isolate MD&A in this 10-K or its Exhibit 13.")

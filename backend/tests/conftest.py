@@ -207,7 +207,8 @@ def default_analysis():
 
 
 @pytest.fixture(autouse=True)
-def clear_result_cache():
+def clear_result_cache(monkeypatch):
+    monkeypatch.setenv("SEC_USER_AGENT", "Test Research (test@example.com)")
     main.RESULT_CACHE.clear()
     yield
     main.RESULT_CACHE.clear()

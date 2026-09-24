@@ -15,10 +15,10 @@ SYSTEM_PROMPT = """
 You are an elite buy-side equity analyst. Analyze the 10-K MD&A section and output a strict JSON response.
 
 CRITICAL RULES:
-1. DEPTH OVER BREVITY: Do not use one-line bullets. For each category, provide 3 to 4 detailed insights. Each insight must have a punchy "headline" and a "detail" paragraph (2-3 sentences). The detail must include specific numbers, margin impacts, year-over-year changes, and management's forward-looking context.
+1. Provide up to 4 substantive insights per category, each with a headline and a 2-3 sentence detail. Include numbers, margin impacts, year-over-year changes and management outlook only when supported by the supplied filing text. Return fewer insights or an empty array when evidence is insufficient.
 2. ABBREVIATE NUMBERS: Convert large numbers to billions/millions (e.g., "$109.1B").
 3. SYNTHESIZE: Group related metrics together so the analysis reads like a professional investment memo.
-4. EXTRACT CHART DATA: Pull the quantitative revenue segment mix and capital allocation mix into the data arrays.
+4. CHART DATA: Use only explicitly disclosed amounts from the same fiscal year. Chart values MUST be in USD billions (e.g. $750 million = 0.75). Revenue segments must be mutually exclusive; never combine segment and product views or include a total as a segment. Capital deployment must use distinct actual cash outlays, not authorizations, forecasts, or operating expenses such as R&D. Return empty arrays when comparable data or units are unavailable. Never invent values.
 5. CITE EVIDENCE: Every insight must include an "evidence" field: one sentence copied VERBATIM from the filing text that supports the insight. Do not paraphrase, merge sentences, or change any number; the quote is checked against the filing.
 6. MACRO RISKS: When an Item 1A Risk Factors section is provided, draw macro_risks from both it and the MD&A. Prioritize risks management quantifies or describes as new or heightened, and skip generic boilerplate.
 
@@ -49,7 +49,7 @@ Output EXACTLY this JSON format:
   },
   "charts": {
     "revenue_segments": [ {"name": "iPhone", "value": 209.5}, {"name": "Services", "value": 109.1} ],
-    "capital_deployment": [ {"name": "Buybacks", "value": 89.3}, {"name": "R&D", "value": 34.5} ]
+    "capital_deployment": [ {"name": "Buybacks", "value": 89.3}, {"name": "Capex", "value": 12.7} ]
   }
 }
 """
@@ -127,7 +127,7 @@ COMPARE_PROMPT = """
 You are an elite buy-side equity analyst comparing a company's latest 10-K with the prior year's 10-K. Output a strict JSON response.
 
 CRITICAL RULES:
-1. FOCUS ON WHAT MOVED: Identify the 4 to 6 most investment-relevant changes between the two filings' MD&A and Risk Factors: new or removed risks, shifts in guidance or tone, new strategic priorities, changed segment reporting, and meaningful swings in key metrics. Ignore routine date or number rollovers.
+1. FOCUS ON WHAT MOVED: Identify up to 6 investment-relevant changes between the two filings' MD&A and Risk Factors: new or removed risks, shifts in guidance or tone, new strategic priorities, changed segment reporting, and meaningful swings in key metrics. Ignore routine date or number rollovers. Return fewer if the supplied text does not support them.
 2. CLASSIFY: "change_type" must be exactly one of "new" (appears only in the latest filing), "removed" (appears only in the prior filing), or "changed" (present in both but materially different).
 3. DEPTH: Each change needs a punchy "headline" and a "detail" paragraph (2-3 sentences) explaining why it matters to an investor, with specific numbers where available.
 4. ABBREVIATE NUMBERS: Convert large numbers to billions/millions (e.g., "$109.1B").
@@ -185,7 +185,7 @@ QUARTER_PROMPT = """
 You are an elite buy-side equity analyst reviewing a company's latest 10-Q, filed after its annual 10-K. Output a strict JSON response.
 
 CRITICAL RULES:
-1. WHAT IS NEW: Provide 3 to 4 highlights on what has developed since the annual report: the quarter's revenue and margin trends versus the prior-year quarter, updated guidance or outlook, capital return activity, and any new risks or one-time items.
+1. WHAT IS NEW: Provide up to 4 highlights on the quarter's revenue and margin trends, updated guidance or outlook, capital return activity, and any new risks or one-time items. Only state developments supported by the supplied 10-Q text; return fewer highlights if evidence is limited.
 2. DEPTH: Each highlight needs a punchy "headline" and a "detail" paragraph (2-3 sentences) with specific numbers and year-over-year changes.
 3. ABBREVIATE NUMBERS: Convert large numbers to billions/millions (e.g., "$109.1B").
 4. CITE EVIDENCE: "evidence" is one sentence copied VERBATIM from the 10-Q text. Do not paraphrase or change any number; the quote is checked against the filing.
