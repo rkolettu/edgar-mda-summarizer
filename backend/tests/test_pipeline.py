@@ -91,7 +91,7 @@ def test_missing_gemini_key(fake_sec, monkeypatch):
     import main
 
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    analysis.get_client.cache_clear()
+    analysis.reset_client()
     res = TestClient(main.app).get("/api/summarize", params={"ticker": "AAPL"})
     assert res.status_code == 500
     assert "GEMINI_API_KEY" in res.json()["detail"]

@@ -91,3 +91,29 @@ def test_main_analysis_failure_returns_quickly(client, fake_gemini):
     res = client.get("/api/summarize", params={"ticker": "AAPL"})
     assert res.status_code == 502
     assert time.perf_counter() - start < 1.0
+
+
+def test_parallel_calls_share_one_gemini_client(monkeypatch):
+    import threading
+
+    created = []
+
+    class SlowClient:
+        def __init__(self, api_key):
+            time.sleep(0.1)  # a cold start widens the race window
+            created.append(self)
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(analysis.genai, "Client", SlowClient)
+    analysis.reset_client()
+    try:
+        seen = []
+        threads = [threading.Thread(target=lambda: seen.append(analysis.get_client())) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert len(created) == 1
+        assert all(c is created[0] for c in seen)
+    finally:
+        analysis.reset_client()

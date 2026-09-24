@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from functools import lru_cache
+import threading
 
 from fastapi import HTTPException
 from google import genai
@@ -82,18 +82,33 @@ class Analysis(BaseModel):
     charts: Charts
 
 
-# Cached so the client outlives each call: genai.Client closes its HTTP connection when garbage-collected.
-@lru_cache(maxsize=1)
+# genai.Client closes its HTTP connection when garbage-collected, so keep exactly one alive for the
+# process. The lock matters: Gemini calls run in parallel threads, and an unlocked cache lets each
+# thread build its own client, most of which are dropped (and closed) mid-request.
+_client: genai.Client | None = None
+_client_lock = threading.Lock()
+
+
 def get_client() -> genai.Client:
-    if not os.environ.get("GEMINI_API_KEY"):
-        raise HTTPException(status_code=500, detail="GEMINI_API_KEY environment variable is not set.")
-    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
-    return client
+    global _client
+    with _client_lock:
+        if _client is None:
+            if not os.environ.get("GEMINI_API_KEY"):
+                raise HTTPException(status_code=500, detail="GEMINI_API_KEY environment variable is not set.")
+            _client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+        return _client
+
+
+def reset_client() -> None:
+    global _client
+    with _client_lock:
+        _client = None
 
 
 def generate(system_prompt: str, contents: str, schema: type[BaseModel]) -> BaseModel:
     try:
-        response = get_client().models.generate_content(
+        client = get_client()
+        response = client.models.generate_content(
             model=GEMINI_MODEL,
             contents=contents,
             config=types.GenerateContentConfig(
