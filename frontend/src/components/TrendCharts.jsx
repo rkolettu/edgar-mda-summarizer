@@ -1,4 +1,3 @@
-import { ChartColumn, ChartLine } from 'lucide-react'
 import {
   Bar,
   BarChart,
@@ -34,7 +33,7 @@ function SeriesTooltip({ active, payload, label, series, format }) {
   if (!active || !payload?.length) return null
   const row = payload[0].payload
   return (
-    <div className="rounded-md border border-line bg-panel-2 px-3 py-2 text-xs shadow-xl shadow-black/40">
+    <div className="rounded-lg border border-line bg-panel px-3 py-2 text-xs shadow-lg shadow-black/10">
       <div className="mb-1 font-medium text-ink">{label}</div>
       {series.map((s) => (
         <div key={s.key} className="flex items-center justify-between gap-4">
@@ -56,12 +55,12 @@ function toRows(years, keys) {
 export function RevenueFcfChart({ years }) {
   const series = [
     { key: 'revenue', label: 'Revenue', color: SERIES.blue },
-    { key: 'free_cash_flow', label: 'Free Cash Flow', color: SERIES.aqua },
+    { key: 'free_cash_flow', label: 'Free cash flow', color: SERIES.aqua },
   ].filter((s) => years.some((y) => y[s.key] != null))
   const rows = toRows(years, series.map((s) => s.key))
 
   return (
-    <ChartCard title="Revenue & Free Cash Flow" subtitle={`${years.length}-year trend`} icon={ChartColumn}>
+    <ChartCard title="Revenue & free cash flow" subtitle={`${years.length}-year trend`}>
       {series.length === 0 ? (
         <EmptyChart message="No revenue or cash flow data reported" />
       ) : (
@@ -74,7 +73,7 @@ export function RevenueFcfChart({ years }) {
                 <XAxis dataKey="fy" tick={AXIS_TICK} axisLine={{ stroke: CHART_CHROME.axis }} tickLine={false} />
                 <YAxis tickFormatter={(v) => formatUsd(v, { digits: 0 })} tick={AXIS_TICK} axisLine={false} tickLine={false} width={56} />
                 <ReferenceLine y={0} stroke={CHART_CHROME.axis} />
-                <Tooltip cursor={{ fill: 'rgba(255,255,255,0.04)' }} content={<SeriesTooltip series={series} format={formatUsd} />} />
+                <Tooltip cursor={{ fill: 'rgba(45,86,148,0.05)' }} content={<SeriesTooltip series={series} format={formatUsd} />} />
                 {series.map((s) => (
                   <Bar key={s.key} dataKey={s.key} name={s.label} fill={s.color} radius={[4, 4, 0, 0]} maxBarSize={28} isAnimationActive={false} />
                 ))}
@@ -102,7 +101,7 @@ export function MarginsChart({ years }) {
   const rows = toRows(withMargins, series.map((s) => s.key))
 
   return (
-    <ChartCard title="Margins" subtitle={`${years.length}-year trend`} icon={ChartLine}>
+    <ChartCard title="Margins" subtitle={`${years.length}-year trend`}>
       {series.length === 0 ? (
         <EmptyChart message="Margins need reported revenue" />
       ) : (

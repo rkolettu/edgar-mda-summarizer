@@ -1,14 +1,13 @@
-import { ChartPie, CircleAlert, CircleCheck } from 'lucide-react'
+import { CircleAlert, CircleCheck } from 'lucide-react'
 import { useState } from 'react'
 import { Cell, Pie, PieChart, ResponsiveContainer } from 'recharts'
 import { STATUS } from '../lib/colors'
 import { formatShare, formatSignedPct, formatUsd } from '../lib/format'
 import { ChartCard, EmptyChart } from './ChartCard'
 
-// Order validated for CVD + normal-vision separation on the panel surface, including the donut's wrap-around pair.
-const SEGMENT_COLORS = ['#3987e5', '#199e70', '#9085e9', '#c98500', '#d55181']
-const OTHER_COLOR = '#5b6675'
-const PANEL_SURFACE = '#11161d'
+const SEGMENT_COLORS = ['#355e99', '#4c7f72', '#8a7396', '#aa8247', '#b46a78']
+const OTHER_COLOR = '#8c8a83'
+const PANEL_SURFACE = '#fffefa'
 
 function toSegments(raw) {
   const sorted = raw.filter((d) => d.value > 0).sort((a, b) => b.value - a.value)
@@ -42,7 +41,7 @@ export default function RevenueMixChart({ data, check }) {
   const focus = active === null ? null : segments[active]
 
   return (
-    <ChartCard title="Revenue Mix" subtitle="USD" icon={ChartPie} footer={<ReconciliationNote check={check} />}>
+    <ChartCard title="Revenue mix" subtitle="USD" footer={<ReconciliationNote check={check} />}>
       {segments.length === 0 ? (
         <EmptyChart message="No segment revenue disclosed" />
       ) : (

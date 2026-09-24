@@ -1,4 +1,3 @@
-import { ChartBar } from 'lucide-react'
 import { Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { CHART_CHROME, SERIES } from '../lib/colors'
 import { formatUsd } from '../lib/format'
@@ -16,7 +15,7 @@ export default function CapitalDeploymentChart({ data, source }) {
   const height = rows.length * ROW_HEIGHT + 32
 
   return (
-    <ChartCard title="Capital Deployment" subtitle="USD" icon={ChartBar} footer={SOURCE_NOTES[source]}>
+    <ChartCard title="Capital deployment" subtitle="USD" footer={SOURCE_NOTES[source]}>
       {rows.length === 0 ? (
         <EmptyChart message="No capital deployment figures disclosed" />
       ) : (
@@ -40,7 +39,7 @@ export default function CapitalDeploymentChart({ data, source }) {
                 tickLine={false}
               />
               <Tooltip
-                cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+                cursor={{ fill: 'rgba(45,86,148,0.05)' }}
                 content={<ChartTooltip formatValue={formatUsd} />}
               />
               <Bar dataKey="value" fill={SERIES.blue} radius={[0, 4, 4, 0]} maxBarSize={22} isAnimationActive={false}>
@@ -48,7 +47,7 @@ export default function CapitalDeploymentChart({ data, source }) {
                   dataKey="value"
                   position="right"
                   formatter={formatUsd}
-                  style={{ fill: '#ffffff', fontSize: 12, fontFamily: 'var(--font-mono)' }}
+                  style={{ fill: '#575650', fontSize: 12, fontFamily: 'var(--font-mono)' }}
                 />
               </Bar>
             </BarChart>

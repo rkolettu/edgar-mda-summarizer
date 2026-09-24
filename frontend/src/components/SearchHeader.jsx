@@ -1,4 +1,4 @@
-import { FileText, LoaderCircle, Search } from 'lucide-react'
+import { ArrowUpRight, LoaderCircle, Search } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { getJson } from '../lib/api'
 
@@ -83,24 +83,22 @@ export default function SearchHeader({ query, onQueryChange, onSubmit, loading }
   const showList = open && q.length > 0 && (suggestions.length > 0 || searched === q)
 
   return (
-    <header className="sticky top-0 z-20 border-b border-line bg-page/90 backdrop-blur">
-      <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:gap-6 sm:px-6">
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-accent/15 text-accent">
-            <FileText size={17} strokeWidth={2} />
-          </div>
+    <header className="relative z-20 border-b border-line bg-page/90">
+      <div className="mx-auto flex max-w-6xl flex-col gap-5 px-5 py-5 sm:flex-row sm:items-center sm:gap-8 sm:px-8">
+        <div className="flex shrink-0 items-center gap-3">
+          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-ink font-serif text-xl text-panel" aria-hidden="true">7</span>
           <div className="leading-tight">
-            <div className="text-sm font-semibold tracking-tight">Item 7 Extractor</div>
-            <div className="text-[11px] text-muted">SEC 10-K MD&amp;A Intelligence</div>
+            <div className="text-[15px] font-semibold tracking-[-0.04em] text-ink">EDGAR <span className="font-normal text-muted">/</span> Research</div>
+            <div className="mt-0.5 text-[10px] font-medium tracking-[0.13em] text-muted uppercase">An annual filing workspace</div>
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="flex flex-1 gap-2 sm:ml-auto sm:max-w-lg">
-          <div className="relative flex-1">
+        <form onSubmit={handleSubmit} className="flex flex-1 gap-2 sm:ml-auto sm:max-w-xl">
+          <div className="relative min-w-0 flex-1">
             <label htmlFor={`${listId}-input`} className="sr-only">
               Company or ticker
             </label>
-            <Search size={16} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted" />
+            <Search size={16} className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-muted" />
             <input
               id={`${listId}-input`}
               role="combobox"
@@ -121,14 +119,14 @@ export default function SearchHeader({ query, onQueryChange, onSubmit, loading }
               autoFocus
               autoComplete="off"
               spellCheck={false}
-              className="h-10 w-full rounded-md border border-line bg-panel pr-3 pl-9 text-sm text-ink placeholder:text-muted focus:border-accent focus:ring-2 focus:ring-accent/30 focus:outline-none"
+              className="h-11 w-full rounded-xl border border-line bg-panel pr-3 pl-10 text-sm text-ink placeholder:text-muted focus:border-accent focus:ring-2 focus:ring-accent/15 focus:outline-none"
             />
 
             {showList && (
               <ul
                 id={listId}
                 role="listbox"
-                className="absolute top-full right-0 left-0 z-30 mt-1.5 max-h-80 overflow-y-auto rounded-md border border-line bg-panel-2 py-1 shadow-2xl shadow-black/50"
+                className="absolute top-full right-0 left-0 z-30 mt-1.5 max-h-80 overflow-y-auto rounded-xl border border-line bg-panel py-1 shadow-xl shadow-black/10"
               >
                 {suggestions.length === 0 ? (
                   <li className="px-3 py-2.5 text-sm text-muted">No SEC-registered company matches “{q}”</li>
@@ -143,7 +141,7 @@ export default function SearchHeader({ query, onQueryChange, onSubmit, loading }
                       onMouseEnter={() => setHighlighted(i)}
                       onClick={() => choose(s)}
                       className={`flex cursor-pointer items-center gap-3 px-3 py-2 text-sm ${
-                        i === highlighted ? 'bg-accent/15' : ''
+                        i === highlighted ? 'bg-panel-2' : ''
                       }`}
                     >
                       <span className="w-16 shrink-0 font-mono text-xs text-ink">
@@ -161,10 +159,11 @@ export default function SearchHeader({ query, onQueryChange, onSubmit, loading }
           <button
             type="submit"
             disabled={loading || !q}
-            className="flex h-10 items-center gap-2 rounded-md bg-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-panel-2 disabled:text-muted"
+            className="flex h-11 shrink-0 items-center gap-2 rounded-xl bg-ink px-4 text-sm font-semibold text-panel transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:bg-line disabled:text-muted"
           >
             {loading && <LoaderCircle size={15} className="animate-spin" />}
-            {loading ? 'Generating' : 'Generate'}
+            {loading ? 'Reading' : 'Analyze'}
+            {!loading && <ArrowUpRight size={15} aria-hidden />}
           </button>
         </form>
       </div>
