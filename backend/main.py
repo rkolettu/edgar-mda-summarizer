@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -148,7 +150,16 @@ def summarize(company_name: str, ticker: str, mdna_text: str) -> Item7Summary:
 
 @app.get("/api/summarize")
 def summarize_ticker(ticker: str = Query(..., min_length=1, max_length=10)):
-    ticker = ticker.strip().upper()
+    # Unhandled 500s bypass CORSMiddleware, which the browser reports only as "Failed to fetch".
+    try:
+        return run_pipeline(ticker.strip().upper())
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {exc!r}") from exc
+
+
+def run_pipeline(ticker: str) -> dict:
     cik, title = lookup_cik(ticker)
     padded_cik = str(cik).zfill(10)
 
