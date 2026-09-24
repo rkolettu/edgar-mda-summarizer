@@ -1,3 +1,6 @@
+import pytest
+from fastapi import HTTPException
+
 import sec
 from tests.conftest import MDNA_BODY
 
@@ -92,16 +95,23 @@ def test_exhibit_type_match_is_prefix(fake_sec):
     assert sec.find_exhibit(BANK_CIK, BANK_ACCESSION, "EX-13") == EX13_URL
 
 
-def test_no_exhibit_falls_back_to_filing_start(fake_sec):
+def test_no_exhibit_rejects_unrelated_filing_text(fake_sec):
     fake_sec.add_text(INDEX_URL, index_html([("10-K", "/Archives/edgar/data/19617/000001961726000044/corp-10k.htm", "10-K")]))
-    mdna = sec.extract_mdna(BANK_CIK, FILING, bank_10k_text(), "https://doc")
-    assert mdna["source"] == "fallback"
-    assert mdna["url"] == "https://doc"
+    with pytest.raises(HTTPException, match="Could not isolate MD&A") as exc:
+        sec.extract_mdna(BANK_CIK, FILING, bank_10k_text(), "https://doc")
+    assert exc.value.status_code == 422
 
 
-def test_missing_index_page_falls_back(fake_sec):
-    mdna = sec.extract_mdna(BANK_CIK, FILING, bank_10k_text(), "https://doc")
-    assert mdna["source"] == "fallback"
+def test_missing_index_page_rejects_unrelated_filing_text(fake_sec):
+    with pytest.raises(HTTPException, match="Could not isolate MD&A"):
+        sec.extract_mdna(BANK_CIK, FILING, bank_10k_text(), "https://doc")
+
+
+def test_unparseable_exhibit_does_not_claim_to_be_mdna(fake_sec):
+    fake_sec.add_text(INDEX_URL, index_html([("Annual report", "/Archives/edgar/data/19617/000001961726000044/corp-ex13.htm", "EX-13")]))
+    fake_sec.add_text(EX13_URL, "<p>Annual report without a recognizable MD&A section.</p>")
+    with pytest.raises(HTTPException, match="Could not isolate MD&A"):
+        sec.extract_mdna(BANK_CIK, FILING, bank_10k_text(), "https://doc")
 
 
 def test_extracts_item_1a_risk_factors():

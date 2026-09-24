@@ -208,8 +208,6 @@ def run_pipeline(query: str) -> tuple[dict, bool]:
 
     mdna, risk_factors, fin = current["mdna"], current["risk_factors"], fin_section.value
     warnings: list[str] = []
-    if mdna["source"] == "fallback":
-        warnings.append("Item 7 could not be isolated; the analysis used the start of the filing instead.")
     for section in (fin_section, changes, quarter):
         warnings.extend(section.warnings)
 

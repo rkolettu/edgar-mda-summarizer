@@ -16,7 +16,6 @@ ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession_no_dashe
 FILING_INDEX_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession_no_dashes}/{accession}-index.htm"
 REQUEST_TIMEOUT = 30
 
-FALLBACK_CHARS = 100_000
 RISK_FACTORS_CHARS = 80_000
 MIN_SECTION_CHARS = 2_000
 
@@ -246,10 +245,12 @@ def load_10q(cik: int, filing: dict) -> dict:
     document_url = archive_url(cik, filing["accession_number"], filing["primary_doc"])
     text = html_to_text(sec_get(document_url).text)
     mdna = extract_section(text, TENQ_MDNA_START, TENQ_MDNA_END)
+    if mdna is None:
+        raise HTTPException(status_code=422, detail="Could not isolate Item 2 MD&A in the 10-Q.")
     return {
         **filing,
         "document_url": document_url,
-        "mdna": {"text": mdna or text[:FALLBACK_CHARS], "source": "item2" if mdna else "fallback", "url": document_url},
+        "mdna": {"text": mdna, "source": "item2", "url": document_url},
     }
 
 
@@ -263,6 +264,7 @@ def extract_mdna(cik: int, filing: dict, filing_text: str, document_url: str) ->
     if exhibit_url:
         exhibit_text = html_to_text(sec_get(exhibit_url).text)
         mdna = extract_section(exhibit_text, ANNUAL_REPORT_MDNA_START, ANNUAL_REPORT_MDNA_END)
-        return {"text": mdna or exhibit_text[:FALLBACK_CHARS], "source": "exhibit13", "url": exhibit_url}
+        if mdna:
+            return {"text": mdna, "source": "exhibit13", "url": exhibit_url}
 
-    return {"text": filing_text[:FALLBACK_CHARS], "source": "fallback", "url": document_url}
+    raise HTTPException(status_code=422, detail="Could not isolate MD&A in this 10-K or its Exhibit 13.")

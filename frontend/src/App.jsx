@@ -17,7 +17,6 @@ const QUICK_TICKERS = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'JPM']
 const MDNA_SOURCE_LABELS = {
   item7: 'Item 7 MD&A',
   exhibit13: 'Annual report MD&A (Exhibit 13)',
-  fallback: 'Full filing (Item 7 not isolated)',
 }
 
 const SECTIONS = [
@@ -28,7 +27,6 @@ const SECTIONS = [
 
 function CompanyHeader({ data }) {
   const { filing } = data
-  const isFallback = filing.mdna_source === 'fallback'
 
   return (
     <div className="mb-6 flex flex-col gap-3 border-b border-line pb-5 sm:flex-row sm:items-end sm:justify-between">
@@ -57,7 +55,7 @@ function CompanyHeader({ data }) {
         )}
         <div className="flex gap-1.5">
           <dt className="text-muted">Source</dt>
-          <dd className={isFallback ? 'text-[#c98500]' : 'text-ink-2'}>{MDNA_SOURCE_LABELS[filing.mdna_source]}</dd>
+          <dd className="text-ink-2">{MDNA_SOURCE_LABELS[filing.mdna_source]}</dd>
         </div>
         {filing.document_url && (
           <a
@@ -101,7 +99,7 @@ function Warnings({ items }) {
 function EmptyState({ onPick }) {
   return (
     <div className="mx-auto max-w-xl py-20 text-center">
-      <h1 className="text-2xl font-semibold tracking-tight text-ink">Institutional-grade 10-K MD&amp;A analysis</h1>
+      <h1 className="text-2xl font-semibold tracking-tight text-ink">Explore a company's 10-K MD&amp;A</h1>
       <p className="mt-3 text-sm leading-relaxed text-ink-2">
         Search by company name or ticker to pull the latest 10-K from SEC EDGAR, isolate Item 7, and generate a buy-side memo on
         revenue drivers, capital allocation, and macro risk.

@@ -47,7 +47,6 @@ CAPITAL_DEPLOYMENT = [
     ("buybacks", "Share Buybacks"),
     ("dividends", "Dividends"),
     ("capex", "Capex"),
-    ("rnd", "R&D"),
     ("acquisitions", "Acquisitions"),
     ("debt_repayment", "Debt Repayment"),
 ]
