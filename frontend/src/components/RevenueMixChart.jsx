@@ -1,7 +1,8 @@
-import { ChartPie } from 'lucide-react'
+import { ChartPie, CircleAlert, CircleCheck } from 'lucide-react'
 import { useState } from 'react'
 import { Cell, Pie, PieChart, ResponsiveContainer } from 'recharts'
-import { formatBillions, formatPercent } from '../lib/format'
+import { STATUS } from '../lib/colors'
+import { formatShare, formatSignedPct, formatUsd } from '../lib/format'
 import { ChartCard, EmptyChart } from './ChartCard'
 
 // Order validated for CVD + normal-vision separation on the panel surface, including the donut's wrap-around pair.
@@ -19,14 +20,29 @@ function toSegments(raw) {
   return [...head, { name: 'Other', value: otherValue, color: OTHER_COLOR }]
 }
 
-export default function RevenueMixChart({ data }) {
+function ReconciliationNote({ check }) {
+  if (!check) return 'Segments extracted from the MD&A by Gemini; no XBRL revenue to reconcile against.'
+  const Icon = check.reconciles ? CircleCheck : CircleAlert
+  return (
+    <span className="flex items-start gap-1.5">
+      <Icon size={13} className="mt-px shrink-0" style={{ color: check.reconciles ? STATUS.good : STATUS.warning }} aria-hidden />
+      <span>
+        {check.reconciles
+          ? `Segments reconcile to reported revenue of ${formatUsd(check.reported_revenue)} (${formatSignedPct(check.difference)}).`
+          : `Segments sum to ${formatUsd(check.segments_total)} vs. reported revenue of ${formatUsd(check.reported_revenue)} (${formatSignedPct(check.difference)}). The breakdown may omit segments or mix product and geographic views.`}
+      </span>
+    </span>
+  )
+}
+
+export default function RevenueMixChart({ data, check }) {
   const [active, setActive] = useState(null)
   const segments = toSegments(data)
   const total = segments.reduce((sum, d) => sum + d.value, 0)
   const focus = active === null ? null : segments[active]
 
   return (
-    <ChartCard title="Revenue Mix" subtitle="USD" icon={ChartPie}>
+    <ChartCard title="Revenue Mix" subtitle="USD" icon={ChartPie} footer={<ReconciliationNote check={check} />}>
       {segments.length === 0 ? (
         <EmptyChart message="No segment revenue disclosed" />
       ) : (
@@ -65,12 +81,12 @@ export default function RevenueMixChart({ data }) {
                   <span className="max-w-[9rem] truncate text-[11px] tracking-wide text-ink-2 uppercase">
                     {focus.name}
                   </span>
-                  <span className="text-xl font-semibold text-ink">{formatBillions(focus.value)}</span>
-                  <span className="font-mono text-xs text-muted">{formatPercent(focus.value, total)} of total</span>
+                  <span className="text-xl font-semibold text-ink">{formatUsd(focus.value)}</span>
+                  <span className="font-mono text-xs text-muted">{formatShare(focus.value, total)} of total</span>
                 </>
               ) : (
                 <>
-                  <span className="text-xl font-semibold text-ink">{formatBillions(total)}</span>
+                  <span className="text-xl font-semibold text-ink">{formatUsd(total)}</span>
                   <span className="text-[11px] tracking-wide text-muted uppercase">Total</span>
                 </>
               )}
@@ -93,9 +109,9 @@ export default function RevenueMixChart({ data }) {
                       <span className="text-ink-2">{d.name}</span>
                     </span>
                   </td>
-                  <td className="py-2 text-right font-mono text-ink tabular-nums">{formatBillions(d.value)}</td>
+                  <td className="py-2 text-right font-mono text-ink tabular-nums">{formatUsd(d.value)}</td>
                   <td className="w-16 py-2 pr-1 text-right font-mono text-muted tabular-nums">
-                    {formatPercent(d.value, total)}
+                    {formatShare(d.value, total)}
                   </td>
                 </tr>
               ))}

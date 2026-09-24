@@ -1,67 +1,136 @@
-import os
-import sys
-import unittest
-from pathlib import Path
-from unittest.mock import Mock, patch
+import pytest
 
-from fastapi import HTTPException
+import analysis
+import sec
+from tests.conftest import APPLE_10K_URL
+from tests.xbrl_fixture import apple_companyfacts
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import main  # noqa: E402
+APPLE_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json"
 
 
-class Item7Tests(unittest.TestCase):
-    def test_prefers_body_over_table_of_contents(self):
-        filing = (
-            "Item 7. Management's Discussion and Analysis ........ Item 8. Financial Statements "
-            "Item 7. Management's Discussion and Analysis "
-            + "Revenue and operating results. " * 100
-            + "Item 8. Financial Statements"
-        )
-        result = main.extract_item7(filing)
-        self.assertIsNotNone(result)
-        self.assertTrue(result.startswith("Item 7. Management's Discussion and Analysis Revenue"))
-        self.assertNotIn("Item 8", result)
-
-    @patch.object(main, "summarize")
-    @patch.object(main, "sec_get")
-    @patch.object(main, "find_latest_10k")
-    @patch.object(main, "resolve_company")
-    def test_missing_item7_does_not_call_model(self, company, filing, sec_get, summarize):
-        company.return_value = {"ticker": "TEST", "cik": 123, "name": "Test Corp"}
-        filing.return_value = {
-            "company_name": "Test Corp", "accession_number": "000-00-1",
-            "primary_doc": "filing.htm", "filing_date": "2026-01-01", "report_date": "2025-12-31",
-        }
-        sec_get.return_value.text = "<html><body>No MD&A heading here.</body></html>"
-
-        with self.assertRaises(HTTPException) as caught:
-            main.run_pipeline("TEST")
-
-        self.assertEqual(caught.exception.status_code, 422)
-        summarize.assert_not_called()
+def test_summarize_happy_path(client, fake_sec, fake_gemini):
+    res = client.get("/api/summarize", params={"ticker": "apple"}, headers={"Origin": "http://localhost:5173"})
+    assert res.status_code == 200
+    assert res.headers["access-control-allow-origin"] == "*"
+    body = res.json()
+    assert body["ticker"] == "AAPL"
+    assert body["company_name"] == "Apple Inc."
+    assert body["filing"]["filing_date"] == "2025-10-31"
+    assert body["filing"]["report_date"] == "2025-09-27"
+    assert body["filing"]["document_url"] == APPLE_10K_URL
+    assert body["filing"]["mdna_source"] == "item7"
+    assert body["filing"]["mdna_url"] == APPLE_10K_URL
+    assert body["summary"]["revenue_drivers"][0]["headline"] == "Services Acceleration"
 
 
-class SecRequestTests(unittest.TestCase):
-    @patch.dict(os.environ, {"SEC_USER_AGENT": ""})
-    @patch.object(main.requests, "get")
-    def test_missing_user_agent_fails_before_request(self, get):
-        with self.assertRaises(HTTPException) as caught:
-            main.sec_get(main.TICKERS_URL)
-        self.assertEqual(caught.exception.status_code, 500)
-        get.assert_not_called()
-
-    @patch.dict(os.environ, {"SEC_USER_AGENT": "Research App (contact@example.com)"})
-    @patch.object(main.requests, "get")
-    def test_configured_user_agent_sent_to_sec(self, get):
-        get.return_value = Mock()
-        main.sec_get(main.TICKERS_URL)
-        get.assert_called_once_with(
-            main.TICKERS_URL,
-            headers={"User-Agent": "Research App (contact@example.com)"},
-            timeout=main.REQUEST_TIMEOUT,
-        )
+def test_financials_from_xbrl(client, fake_sec):
+    fake_sec.add_json(APPLE_FACTS_URL, apple_companyfacts())
+    body = client.get("/api/summarize", params={"ticker": "AAPL"}).json()
+    assert body["financials"]["kpis"]["revenue"] == pytest.approx(416.2e9)
+    assert len(body["financials"]["years"]) == 5
+    assert body["charts"]["capital_deployment_source"] == "xbrl"
+    assert body["charts"]["capital_deployment"][0] == {"name": "Share Buybacks", "value": pytest.approx(90.7e9)}
+    assert body["charts"]["revenue_segments"][0] == {"name": "iPhone", "value": pytest.approx(209.6e9)}
+    assert body["warnings"] == []
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_without_xbrl_falls_back_to_gemini_chart_data(client):
+    body = client.get("/api/summarize", params={"ticker": "AAPL"}).json()
+    assert body["financials"] is None
+    assert body["charts"]["capital_deployment_source"] == "gemini"
+    assert body["charts"]["capital_deployment"] == [{"name": "Buybacks", "value": pytest.approx(90.7e9)}]
+    assert any("XBRL" in w for w in body["warnings"])
+
+
+def test_every_sec_request_sends_user_agent(client, fake_sec):
+    client.get("/api/summarize", params={"ticker": "AAPL"})
+    assert fake_sec.calls
+    for _, headers in fake_sec.calls:
+        assert headers["User-Agent"] == "Test Research (test@example.com)"
+
+
+def test_missing_sec_user_agent_fails_before_request(fake_sec, monkeypatch):
+    from fastapi import HTTPException
+
+    monkeypatch.delenv("SEC_USER_AGENT")
+    with pytest.raises(HTTPException, match="SEC_USER_AGENT") as exc:
+        sec.sec_get(sec.TICKERS_URL)
+    assert exc.value.status_code == 500
+    assert fake_sec.calls == []
+
+
+def test_gemini_gets_item7_not_table_of_contents(client, fake_gemini):
+    client.get("/api/summarize", params={"ticker": "AAPL"})
+    call = fake_gemini.calls[0]
+    assert call["model"] == "gemini-2.5-flash"
+    assert call["config"].response_mime_type == "application/json"
+    mdna = call["contents"].split("--- BEGIN 10-K MD&A ---")[1]
+    assert mdna.strip().startswith("Item 7. Management's Discussion and Analysis of Financial Condition and Results")
+    assert "Item 8. Financial Statements and Supplementary Data" not in mdna
+
+
+def test_unknown_ticker_404(client):
+    res = client.get("/api/summarize", params={"ticker": "ZZZZ"})
+    assert res.status_code == 404
+
+
+def test_unexpected_error_keeps_cors_headers(client, monkeypatch):
+    def boom(_):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(sec, "html_to_text", boom)
+    res = client.get("/api/summarize", params={"ticker": "AAPL"}, headers={"Origin": "http://localhost:5173"})
+    assert res.status_code == 500
+    assert res.headers["access-control-allow-origin"] == "*"
+    assert "kaboom" in res.json()["detail"]
+
+
+def test_missing_gemini_key(fake_sec, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import main
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    analysis.get_client.cache_clear()
+    res = TestClient(main.app).get("/api/summarize", params={"ticker": "AAPL"})
+    assert res.status_code == 500
+    assert "GEMINI_API_KEY" in res.json()["detail"]
+
+
+def test_insights_carry_verified_flag(client):
+    summary = client.get("/api/summarize", params={"ticker": "AAPL"}).json()["summary"]
+    assert summary["revenue_drivers"][0]["verified"] is True
+    assert summary["capital_allocation"][0]["verified"] is False
+    assert summary["macro_risks"][0]["verified"] is False
+
+
+def test_prompt_requires_verbatim_evidence(client, fake_gemini):
+    client.get("/api/summarize", params={"ticker": "AAPL"})
+    prompt = fake_gemini.calls[0]["config"].system_instruction
+    assert "CITE EVIDENCE" in prompt
+    assert prompt.startswith("\nYou are an elite buy-side equity analyst.")
+
+
+def test_segment_check(client, fake_sec):
+    fake_sec.add_json(APPLE_FACTS_URL, apple_companyfacts())
+    check = client.get("/api/summarize", params={"ticker": "AAPL"}).json()["checks"]["segments"]
+    assert check["reported_revenue"] == pytest.approx(416.2e9)
+    assert check["segments_total"] == pytest.approx(318.8e9)
+    assert check["reconciles"] is False
+
+
+def test_segment_check_absent_without_xbrl(client):
+    assert client.get("/api/summarize", params={"ticker": "AAPL"}).json()["checks"]["segments"] is None
+
+
+def test_risk_factors_sent_to_gemini_and_used_for_verification(client, fake_gemini):
+    fake_gemini.responses["Analysis"]["summary"]["macro_risks"][0]["evidence"] = (
+        "Changes in foreign exchange rates could adversely affect net sales and gross margins."
+    )
+    body = client.get("/api/summarize", params={"ticker": "AAPL"}).json()
+    contents = fake_gemini.calls[0]["contents"]
+    risks = contents.split("--- BEGIN 10-K ITEM 1A RISK FACTORS ---")[1]
+    assert risks.strip().startswith("Item 1A. Risk Factors")
+    assert "MACRO RISKS" in fake_gemini.calls[0]["config"].system_instruction
+    assert body["filing"]["risk_factors_found"] is True
+    assert body["summary"]["macro_risks"][0]["verified"] is True
