@@ -60,16 +60,3 @@ npm run dev
 Open http://localhost:5173.
 
 The backend reads variables from its process environment. `backend/.env.example` lists the required names; use your own contact email for SEC requests and keep real keys out of Git.
-
-## Deploying to Vercel
-
-One Vercel project serves both apps (Vercel Services, configured in `vercel.json`): the frontend at `/` and the FastAPI backend at `/api`.
-
-1. Import the repo at vercel.com/new and keep the **Services** preset it detects.
-2. Add these environment variables:
-   - `GEMINI_API_KEY`: your Gemini API key
-   - `SEC_USER_AGENT`: an application name and real contact email, e.g. `Your Name Research (you@example.com)`
-   - `VITE_API_URL`: `/` (the frontend calls `/api` on its own origin; the frontend build fails if this is missing)
-3. Deploy.
-
-To host the backend separately instead, deploy `backend/` as its own project with `GEMINI_API_KEY` and `SEC_USER_AGENT`, then set the frontend's `VITE_API_URL` to the backend's HTTPS origin, without `/api`. `VITE_API_URL` is read at build time, so redeploy after changing it. For a local production build, run `VITE_API_URL=http://localhost:8000 npm run build` from `frontend/`.
