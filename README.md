@@ -5,6 +5,25 @@ Pulls the latest 10-K for a ticker from SEC EDGAR, extracts Item 7 (MD&A), and u
 - `backend/`: FastAPI app serving `GET /api/summarize?ticker=AAPL` (accepts a ticker or company name) and `GET /api/search?q=apple` (autocomplete)
 - `frontend/`: React + Vite + Tailwind CSS v4
 
+## What it produces
+
+- Summary tiles and 5-year revenue, free cash flow and margin trends from the SEC's structured XBRL data (`data.sec.gov` companyfacts)
+- A buy-side memo from the 10-K's Item 7 MD&A (or the Exhibit 13 annual report when Item 7 is incorporated by reference) and Item 1A Risk Factors, with each insight's source quote checked against the filing
+- Revenue segments reconciled against reported revenue, and capital deployment from the cash flow statement
+- What changed versus the prior year's 10-K
+- A latest-quarter update from the most recent 10-Q filed after the 10-K
+- Results cached per filing set in memory and at Vercel's CDN (`s-maxage=86400`)
+
+## Tests
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+The suite runs offline against a fake SEC and a fake Gemini client.
+
 ## Run locally
 
 Backend (terminal 1):

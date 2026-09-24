@@ -47,6 +47,14 @@ function CompanyHeader({ data }) {
           <dt className="text-muted">10-K filed</dt>
           <dd className="font-mono text-ink-2">{filing.filing_date}</dd>
         </div>
+        {data.generated_at && (
+          <div className="flex gap-1.5">
+            <dt className="text-muted">Generated</dt>
+            <dd className="font-mono text-ink-2">
+              {new Date(data.generated_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+            </dd>
+          </div>
+        )}
         <div className="flex gap-1.5">
           <dt className="text-muted">Source</dt>
           <dd className={isFallback ? 'text-[#c98500]' : 'text-ink-2'}>{MDNA_SOURCE_LABELS[filing.mdna_source]}</dd>

@@ -38,7 +38,7 @@ export default function LoadingState({ ticker }) {
           Parsing SEC EDGAR Filings &amp; Generating Institutional Insights...
         </p>
         <p className="font-mono text-xs text-muted">
-          {ticker} · {elapsed}s elapsed · typically 10–15s
+          {ticker} · {elapsed}s elapsed · first run typically 20–40s, repeats are instant
         </p>
       </div>
 

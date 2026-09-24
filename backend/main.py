@@ -1,12 +1,24 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Query
+import threading
+from collections import OrderedDict
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 import analysis
 import financials
 import sec
 import verify
+
+# Filings never change once filed, so a finished analysis can be served from Vercel's CDN for a day;
+# a new filing shows up in the next response after that.
+SUMMARY_CACHE_CONTROL = "public, max-age=0, s-maxage=86400, stale-while-revalidate=86400"
+SEARCH_CACHE_CONTROL = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800"
+RESULT_CACHE_SIZE = 64
 
 app = FastAPI(title="item7-extractor")
 
@@ -16,6 +28,42 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class ResultCache:
+    def __init__(self, size: int):
+        self._size = size
+        self._items: OrderedDict[tuple, dict] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key: tuple) -> dict | None:
+        with self._lock:
+            if key not in self._items:
+                return None
+            self._items.move_to_end(key)
+            return self._items[key]
+
+    def put(self, key: tuple, value: dict) -> None:
+        with self._lock:
+            self._items[key] = value
+            self._items.move_to_end(key)
+            while len(self._items) > self._size:
+                self._items.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._items.clear()
+
+
+RESULT_CACHE = ResultCache(RESULT_CACHE_SIZE)
+
+
+@dataclass
+class Section:
+    value: dict | None = None
+    warnings: list[str] = field(default_factory=list)
+    # A transient failure (SEC or Gemini error) means the result must not be cached.
+    degraded: bool = False
 
 
 def json_errors(fn, *args):
@@ -28,28 +76,41 @@ def json_errors(fn, *args):
         raise HTTPException(status_code=500, detail=f"Unexpected error: {exc!r}") from exc
 
 
+def error_detail(exc: Exception) -> str:
+    return exc.detail if isinstance(exc, HTTPException) else repr(exc)
+
+
 @app.get("/api/search")
-def search(q: str = Query(..., min_length=1, max_length=100), limit: int = Query(8, ge=1, le=25)):
-    return json_errors(sec.search_companies, q, limit)
+def search(
+    response: Response,
+    q: str = Query(..., min_length=1, max_length=100),
+    limit: int = Query(8, ge=1, le=25),
+):
+    results = json_errors(sec.search_companies, q, limit)
+    response.headers["Cache-Control"] = SEARCH_CACHE_CONTROL
+    return results
 
 
 @app.get("/api/summarize")
-def summarize_ticker(ticker: str = Query(..., min_length=1, max_length=100)):
-    return json_errors(run_pipeline, ticker)
-
-
-def load_companyfacts(cik: int) -> dict:
-    try:
-        return sec.get_companyfacts(cik)
-    except HTTPException:
-        return {}
-
-
-def load_financials(companyfacts: dict, report_date: str, warnings: list[str]) -> dict | None:
-    result = financials.build_financials(companyfacts, report_date)
-    if result is None:
-        warnings.append("No XBRL financial data found; KPIs and trend charts are unavailable.")
+def summarize_ticker(response: Response, ticker: str = Query(..., min_length=1, max_length=100)):
+    result, degraded = json_errors(run_pipeline, ticker)
+    response.headers["Cache-Control"] = "no-store" if degraded else SUMMARY_CACHE_CONTROL
     return result
+
+
+def load_companyfacts(cik: int) -> tuple[dict, bool]:
+    try:
+        return sec.get_companyfacts(cik), False
+    except HTTPException:
+        return {}, True
+
+
+def build_financials(facts_future: Future, report_date: str) -> Section:
+    companyfacts, failed = facts_future.result()
+    fin = financials.build_financials(companyfacts, report_date)
+    if fin is None:
+        return Section(None, ["No XBRL financial data found; KPIs and trend charts are unavailable."], failed)
+    return Section(fin)
 
 
 def find_newer_10q(submissions: dict, tenk: dict) -> dict | None:
@@ -57,16 +118,42 @@ def find_newer_10q(submissions: dict, tenk: dict) -> dict | None:
     return tenqs[0] if tenqs and tenqs[0]["filing_date"] > tenk["filing_date"] else None
 
 
-def build_latest_quarter(company_name: str, ticker: str, cik: int, tenq_filing: dict | None, companyfacts: dict, warnings: list[str]) -> dict | None:
-    if tenq_filing is None:
-        return None
+def filing_source(tenk: dict) -> str:
+    return verify.normalize(f"{tenk['mdna']['text']}\n{tenk['risk_factors'] or ''}")
+
+
+def build_changes(company_name: str, ticker: str, current: dict, prior_future: Future | None) -> Section:
+    if prior_future is None:
+        return Section(None, ["No prior-year 10-K found; the year-over-year comparison is unavailable."])
     try:
-        tenq = sec.load_10q(cik, tenq_filing)
+        prior = prior_future.result()
+        result = analysis.compare(company_name, ticker, current, prior)
+    except Exception as exc:
+        return Section(None, [f"Year-over-year comparison unavailable: {error_detail(exc)}"], degraded=True)
+
+    sources = {"current": filing_source(current), "prior": filing_source(prior)}
+    items = [
+        {
+            **c.model_dump(),
+            "verified": verify.quote_in_source(c.evidence, sources["prior" if c.change_type == "removed" else "current"]),
+        }
+        for c in result.changes
+    ]
+    prior_filing = {k: prior[k] for k in ("filing_date", "report_date", "document_url")}
+    return Section({"prior_filing": prior_filing, "items": items})
+
+
+def build_latest_quarter(company_name: str, ticker: str, tenq_future: Future | None, facts_future: Future) -> Section:
+    if tenq_future is None:
+        return Section()
+    try:
+        tenq = tenq_future.result()
         result = analysis.summarize_quarter(company_name, ticker, tenq)
-    except HTTPException as exc:
-        warnings.append(f"Latest 10-Q update unavailable: {exc.detail}")
-        return None
-    return {
+    except Exception as exc:
+        return Section(None, [f"Latest 10-Q update unavailable: {error_detail(exc)}"], degraded=True)
+
+    companyfacts, _ = facts_future.result()
+    return Section({
         "filing": {
             "form": tenq["form"],
             "filing_date": tenq["filing_date"],
@@ -78,65 +165,53 @@ def build_latest_quarter(company_name: str, ticker: str, cik: int, tenq_filing: 
         "highlights": verify.annotate(
             [h.model_dump() for h in result.highlights], verify.normalize(tenq["mdna"]["text"])
         ),
-    }
+    })
 
 
-def filing_source(tenk: dict) -> str:
-    return verify.normalize(f"{tenk['mdna']['text']}\n{tenk['risk_factors'] or ''}")
-
-
-def build_changes(company_name: str, ticker: str, cik: int, current: dict, prior_filing: dict | None, warnings: list[str]) -> dict | None:
-    if prior_filing is None:
-        warnings.append("No prior-year 10-K found; the year-over-year comparison is unavailable.")
-        return None
-    try:
-        prior = sec.load_10k(cik, prior_filing)
-        result = analysis.compare(company_name, ticker, current, prior)
-    except HTTPException as exc:
-        warnings.append(f"Year-over-year comparison unavailable: {exc.detail}")
-        return None
-
-    sources = {"current": filing_source(current), "prior": filing_source(prior)}
-    items = [
-        {
-            **c.model_dump(),
-            "verified": verify.quote_in_source(c.evidence, sources["prior" if c.change_type == "removed" else "current"]),
-        }
-        for c in result.changes
-    ]
-    return {
-        "prior_filing": {
-            "filing_date": prior["filing_date"],
-            "report_date": prior["report_date"],
-            "document_url": prior["document_url"],
-        },
-        "items": items,
-    }
-
-
-def run_pipeline(query: str) -> dict:
+def run_pipeline(query: str) -> tuple[dict, bool]:
     company = sec.resolve_company(query)
     ticker, cik = company["ticker"], company["cik"]
-    warnings: list[str] = []
 
     submissions = sec.get_submissions(cik)
     tenks = sec.find_filings(submissions, "10-K", limit=2)
     if not tenks:
         raise HTTPException(status_code=404, detail="No 10-K filing found in the company's recent submissions.")
-    current = sec.load_10k(cik, tenks[0])
     prior_filing = tenks[1] if len(tenks) > 1 else None
-    mdna, risk_factors = current["mdna"], current["risk_factors"]
-    if mdna["source"] == "fallback":
-        warnings.append("Item 7 could not be isolated; the analysis used the start of the filing instead.")
+    tenq_filing = find_newer_10q(submissions, tenks[0])
+
+    cache_key = (cik, *(f["accession_number"] if f else None for f in (tenks[0], prior_filing, tenq_filing)))
+    cached = RESULT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached, False
 
     company_name = submissions.get("name") or company["name"]
-    result = analysis.summarize(company_name, ticker, mdna["text"], risk_factors)
-    companyfacts = load_companyfacts(cik)
-    fin = load_financials(companyfacts, current["report_date"], warnings)
-    changes = build_changes(company_name, ticker, cik, current, prior_filing, warnings)
-    latest_quarter = build_latest_quarter(
-        company_name, ticker, cik, find_newer_10q(submissions, current), companyfacts, warnings
-    )
+    pool = ThreadPoolExecutor(max_workers=8)
+    try:
+        current_future = pool.submit(sec.load_10k, cik, tenks[0])
+        prior_future = pool.submit(sec.load_10k, cik, prior_filing) if prior_filing else None
+        tenq_future = pool.submit(sec.load_10q, cik, tenq_filing) if tenq_filing else None
+        facts_future = pool.submit(load_companyfacts, cik)
+
+        current = current_future.result()
+        summary_future = pool.submit(
+            analysis.summarize, company_name, ticker, current["mdna"]["text"], current["risk_factors"]
+        )
+        changes_future = pool.submit(build_changes, company_name, ticker, current, prior_future)
+        quarter_future = pool.submit(build_latest_quarter, company_name, ticker, tenq_future, facts_future)
+        fin_section = build_financials(facts_future, current["report_date"])
+
+        result = summary_future.result()
+        changes, quarter = changes_future.result(), quarter_future.result()
+    finally:
+        # Don't hold the response for optional work if the main analysis failed.
+        pool.shutdown(wait=False, cancel_futures=True)
+
+    mdna, risk_factors, fin = current["mdna"], current["risk_factors"], fin_section.value
+    warnings: list[str] = []
+    if mdna["source"] == "fallback":
+        warnings.append("Item 7 could not be isolated; the analysis used the start of the filing instead.")
+    for section in (fin_section, changes, quarter):
+        warnings.extend(section.warnings)
 
     # Gemini reports chart values in billions; the API returns raw USD everywhere.
     segments = [{"name": p.name, "value": p.value * 1e9} for p in result.charts.revenue_segments]
@@ -152,10 +227,11 @@ def run_pipeline(query: str) -> dict:
         for key, insights in result.summary
     }
 
-    return {
+    response = {
         "ticker": ticker,
         "company_name": company_name,
         "cik": cik,
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "filing": {
             "form": current["form"],
             "accession_number": current["accession_number"],
@@ -176,10 +252,15 @@ def run_pipeline(query: str) -> dict:
             "segments": verify.segment_check(segments, fin and fin["kpis"]["revenue"]),
         },
         "financials": fin,
-        "changes": changes,
-        "latest_quarter": latest_quarter,
+        "changes": changes.value,
+        "latest_quarter": quarter.value,
         "warnings": warnings,
     }
+
+    degraded = any(s.degraded for s in (fin_section, changes, quarter))
+    if not degraded:
+        RESULT_CACHE.put(cache_key, response)
+    return response, degraded
 
 
 @app.get("/")

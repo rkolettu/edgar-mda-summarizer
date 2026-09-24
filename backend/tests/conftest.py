@@ -206,6 +206,13 @@ def default_analysis():
     }
 
 
+@pytest.fixture(autouse=True)
+def clear_result_cache():
+    main.RESULT_CACHE.clear()
+    yield
+    main.RESULT_CACHE.clear()
+
+
 @pytest.fixture
 def fake_sec(monkeypatch):
     fake = FakeSEC()
