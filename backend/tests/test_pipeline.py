@@ -124,3 +124,10 @@ def test_risk_factors_sent_to_gemini_and_used_for_verification(client, fake_gemi
     assert "MACRO RISKS" in fake_gemini.calls[0]["config"].system_instruction
     assert body["filing"]["risk_factors_found"] is True
     assert body["summary"]["macro_risks"][0]["verified"] is True
+
+
+@pytest.mark.parametrize("prefix", ["/api", ""])
+def test_routes_work_with_or_without_api_prefix(client, prefix):
+    assert client.get(f"{prefix}/health").json() == {"status": "ok"}
+    assert client.get(f"{prefix}/search", params={"q": "apple"}).json()[0]["ticker"] == "AAPL"
+    assert client.get(f"{prefix}/summarize", params={"ticker": "AAPL"}).json()["ticker"] == "AAPL"

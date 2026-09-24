@@ -6,7 +6,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 import analysis
@@ -80,7 +80,10 @@ def error_detail(exc: Exception) -> str:
     return exc.detail if isinstance(exc, HTTPException) else repr(exc)
 
 
-@app.get("/api/search")
+router = APIRouter()
+
+
+@router.get("/search")
 def search(
     response: Response,
     q: str = Query(..., min_length=1, max_length=100),
@@ -91,7 +94,7 @@ def search(
     return results
 
 
-@app.get("/api/summarize")
+@router.get("/summarize")
 def summarize_ticker(response: Response, ticker: str = Query(..., min_length=1, max_length=100)):
     result, degraded = json_errors(run_pipeline, ticker)
     response.headers["Cache-Control"] = "no-store" if degraded else SUMMARY_CACHE_CONTROL
@@ -264,5 +267,12 @@ def run_pipeline(query: str) -> tuple[dict, bool]:
 
 
 @app.get("/")
+@router.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# Vercel Services forwards /api/... with the prefix intact; also serve the bare paths in case a
+# deployment strips it, so the routes work either way.
+app.include_router(router, prefix="/api")
+app.include_router(router)

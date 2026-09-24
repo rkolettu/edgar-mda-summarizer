@@ -49,7 +49,10 @@ Open http://localhost:5173.
 
 ## Deploying to Vercel
 
-Create two Vercel projects from this repo.
+One Vercel project serves both apps (Vercel Services, configured in `vercel.json`): the frontend at `/` and the FastAPI backend at `/api`.
 
-1. Backend: set Root Directory to `backend`. Vercel detects FastAPI from `main.py` and `requirements.txt`. Add the environment variable `GEMINI_API_KEY`.
-2. Frontend: set Root Directory to `frontend` (framework preset: Vite). Add the environment variable `VITE_API_URL` = the backend's URL. It is read at build time, so redeploy after changing it.
+1. Import the repo at vercel.com/new and keep the **Services** preset it detects.
+2. Add the environment variable `GEMINI_API_KEY`.
+3. Deploy.
+
+The frontend calls `/api` on its own origin in production, so `VITE_API_URL` is not needed. Set it only to point the frontend at a separately hosted backend.
