@@ -104,6 +104,16 @@ APPLE_FILINGS = [
 ]
 
 APPLE_10K_URL = "https://www.sec.gov/Archives/edgar/data/320193/000032019325000079/aapl-20250927.htm"
+APPLE_PRIOR_10K_URL = "https://www.sec.gov/Archives/edgar/data/320193/000032019324000123/aapl-20240928.htm"
+
+PRIOR_MDNA_BODY = (
+    "Net sales increased 2% to $391.0 billion. "
+    "The Company experienced supply constraints for certain iPhone models during the first quarter. "
+) * 60
+PRIOR_RISK_BODY = (
+    "The Company depends on component suppliers in Asia and could face supply shortages. "
+    "Changes in foreign exchange rates could adversely affect net sales and gross margins. "
+) * 40
 
 
 class FakeGemini:
@@ -118,6 +128,31 @@ class FakeGemini:
         name = config.response_schema.__name__
         self.calls.append({"model": model, "contents": contents, "config": config, "schema": name})
         return SimpleNamespace(text=json.dumps(self.responses[name]))
+
+
+def default_changes():
+    return {
+        "changes": [
+            {
+                "headline": "Tariffs Become a Named Risk",
+                "detail": "The latest filing adds tariff exposure on China and India imports.",
+                "change_type": "New",
+                "evidence": "The Company's operations are subject to tariffs imposed on imports from China and India.",
+            },
+            {
+                "headline": "Supply Constraints Language Dropped",
+                "detail": "Prior-year references to iPhone supply constraints are gone.",
+                "change_type": "removed",
+                "evidence": "The Company experienced supply constraints for certain iPhone models during the first quarter.",
+            },
+            {
+                "headline": "Growth Reaccelerates",
+                "detail": "Revenue growth improved from 2% to 8%.",
+                "change_type": "accelerated",
+                "evidence": "Net sales increased 2% to $391.0 billion.",
+            },
+        ]
+    }
 
 
 def default_analysis():
@@ -149,6 +184,7 @@ def fake_sec(monkeypatch):
         submissions_payload("Apple Inc.", APPLE_FILINGS),
     )
     fake.add_text(APPLE_10K_URL, ten_k_html())
+    fake.add_text(APPLE_PRIOR_10K_URL, ten_k_html(PRIOR_MDNA_BODY, PRIOR_RISK_BODY))
     monkeypatch.setattr(sec.requests, "get", fake.get)
     sec.load_companies.cache_clear()
     sec.load_ticker_map.cache_clear()
@@ -161,6 +197,7 @@ def fake_sec(monkeypatch):
 def fake_gemini(monkeypatch):
     fake = FakeGemini()
     fake.responses["Analysis"] = default_analysis()
+    fake.responses["Changes"] = default_changes()
     monkeypatch.setattr(analysis, "get_client", lambda: fake)
     return fake
 

@@ -223,6 +223,17 @@ def find_exhibit(cik: int, accession_number: str, exhibit_type: str) -> str | No
     return None
 
 
+def load_10k(cik: int, filing: dict) -> dict:
+    document_url = archive_url(cik, filing["accession_number"], filing["primary_doc"])
+    text = html_to_text(sec_get(document_url).text)
+    return {
+        **filing,
+        "document_url": document_url,
+        "mdna": extract_mdna(cik, filing, text, document_url),
+        "risk_factors": extract_risk_factors(text),
+    }
+
+
 def extract_mdna(cik: int, filing: dict, filing_text: str, document_url: str) -> dict:
     item7 = extract_item7(filing_text)
     if item7:

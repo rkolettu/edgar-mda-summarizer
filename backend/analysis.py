@@ -121,3 +121,61 @@ def summarize(company_name: str, ticker: str, mdna_text: str, risk_factors: str 
     if risk_factors:
         contents += f"\n\n--- BEGIN 10-K ITEM 1A RISK FACTORS ---\n{risk_factors}\n--- END 10-K ITEM 1A RISK FACTORS ---"
     return generate(SYSTEM_PROMPT, contents, Analysis)
+
+
+COMPARE_PROMPT = """
+You are an elite buy-side equity analyst comparing a company's latest 10-K with the prior year's 10-K. Output a strict JSON response.
+
+CRITICAL RULES:
+1. FOCUS ON WHAT MOVED: Identify the 4 to 6 most investment-relevant changes between the two filings' MD&A and Risk Factors: new or removed risks, shifts in guidance or tone, new strategic priorities, changed segment reporting, and meaningful swings in key metrics. Ignore routine date or number rollovers.
+2. CLASSIFY: "change_type" must be exactly one of "new" (appears only in the latest filing), "removed" (appears only in the prior filing), or "changed" (present in both but materially different).
+3. DEPTH: Each change needs a punchy "headline" and a "detail" paragraph (2-3 sentences) explaining why it matters to an investor, with specific numbers where available.
+4. ABBREVIATE NUMBERS: Convert large numbers to billions/millions (e.g., "$109.1B").
+5. CITE EVIDENCE: "evidence" is one sentence copied VERBATIM from the LATEST filing, or from the PRIOR filing when change_type is "removed". Do not paraphrase or change any number; the quote is checked against the filing.
+
+Output EXACTLY this JSON format:
+{
+  "changes": [
+    {
+      "headline": "Tariff Risk Elevated to a Primary Margin Headwind",
+      "detail": "...",
+      "change_type": "new",
+      "evidence": "..."
+    }
+  ]
+}
+"""
+
+COMPARE_MDNA_CHARS = 120_000
+CHANGE_TYPES = {"new", "removed", "changed"}
+
+
+class Change(BaseModel):
+    headline: str
+    detail: str
+    change_type: str
+    evidence: str
+
+
+class Changes(BaseModel):
+    changes: list[Change]
+
+
+def _filing_block(label: str, tenk: dict) -> str:
+    block = f"--- BEGIN {label} 10-K MD&A (fiscal year ended {tenk['report_date']}) ---\n{tenk['mdna']['text'][:COMPARE_MDNA_CHARS]}\n--- END {label} 10-K MD&A ---"
+    if tenk["risk_factors"]:
+        block += f"\n\n--- BEGIN {label} 10-K RISK FACTORS ---\n{tenk['risk_factors']}\n--- END {label} 10-K RISK FACTORS ---"
+    return block
+
+
+def compare(company_name: str, ticker: str, latest: dict, prior: dict) -> Changes:
+    contents = (
+        f"Company: {company_name} ({ticker})\n\n"
+        f"{_filing_block('LATEST', latest)}\n\n{_filing_block('PRIOR', prior)}"
+    )
+    result = generate(COMPARE_PROMPT, contents, Changes)
+    for change in result.changes:
+        change.change_type = change.change_type.strip().lower()
+        if change.change_type not in CHANGE_TYPES:
+            change.change_type = "changed"
+    return result

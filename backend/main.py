@@ -48,28 +48,58 @@ def load_financials(cik: int, report_date: str, warnings: list[str]) -> dict | N
     return result
 
 
+def filing_source(tenk: dict) -> str:
+    return verify.normalize(f"{tenk['mdna']['text']}\n{tenk['risk_factors'] or ''}")
+
+
+def build_changes(company_name: str, ticker: str, cik: int, current: dict, prior_filing: dict | None, warnings: list[str]) -> dict | None:
+    if prior_filing is None:
+        warnings.append("No prior-year 10-K found; the year-over-year comparison is unavailable.")
+        return None
+    try:
+        prior = sec.load_10k(cik, prior_filing)
+        result = analysis.compare(company_name, ticker, current, prior)
+    except HTTPException as exc:
+        warnings.append(f"Year-over-year comparison unavailable: {exc.detail}")
+        return None
+
+    sources = {"current": filing_source(current), "prior": filing_source(prior)}
+    items = [
+        {
+            **c.model_dump(),
+            "verified": verify.quote_in_source(c.evidence, sources["prior" if c.change_type == "removed" else "current"]),
+        }
+        for c in result.changes
+    ]
+    return {
+        "prior_filing": {
+            "filing_date": prior["filing_date"],
+            "report_date": prior["report_date"],
+            "document_url": prior["document_url"],
+        },
+        "items": items,
+    }
+
+
 def run_pipeline(query: str) -> dict:
     company = sec.resolve_company(query)
     ticker, cik = company["ticker"], company["cik"]
     warnings: list[str] = []
 
     submissions = sec.get_submissions(cik)
-    tenks = sec.find_filings(submissions, "10-K", limit=1)
+    tenks = sec.find_filings(submissions, "10-K", limit=2)
     if not tenks:
         raise HTTPException(status_code=404, detail="No 10-K filing found in the company's recent submissions.")
-    filing = tenks[0]
-    document_url = sec.archive_url(cik, filing["accession_number"], filing["primary_doc"])
-
-    text = sec.html_to_text(sec.sec_get(document_url).text)
-    mdna = sec.extract_mdna(cik, filing, text, document_url)
-    mdna_text = mdna["text"]
-    risk_factors = sec.extract_risk_factors(text)
+    current = sec.load_10k(cik, tenks[0])
+    prior_filing = tenks[1] if len(tenks) > 1 else None
+    mdna, risk_factors = current["mdna"], current["risk_factors"]
     if mdna["source"] == "fallback":
         warnings.append("Item 7 could not be isolated; the analysis used the start of the filing instead.")
 
     company_name = submissions.get("name") or company["name"]
-    result = analysis.summarize(company_name, ticker, mdna_text, risk_factors)
-    fin = load_financials(cik, filing["report_date"], warnings)
+    result = analysis.summarize(company_name, ticker, mdna["text"], risk_factors)
+    fin = load_financials(cik, current["report_date"], warnings)
+    changes = build_changes(company_name, ticker, cik, current, prior_filing, warnings)
 
     # Gemini reports chart values in billions; the API returns raw USD everywhere.
     segments = [{"name": p.name, "value": p.value * 1e9} for p in result.charts.revenue_segments]
@@ -79,7 +109,7 @@ def run_pipeline(query: str) -> dict:
         deployment = [{"name": p.name, "value": p.value * 1e9} for p in result.charts.capital_deployment]
         deployment_source = "gemini"
 
-    normalized_source = verify.normalize(f"{mdna_text}\n{risk_factors or ''}")
+    normalized_source = filing_source(current)
     summary = {
         key: verify.annotate([i.model_dump() for i in insights], normalized_source)
         for key, insights in result.summary
@@ -90,11 +120,11 @@ def run_pipeline(query: str) -> dict:
         "company_name": company_name,
         "cik": cik,
         "filing": {
-            "form": filing["form"],
-            "accession_number": filing["accession_number"],
-            "filing_date": filing["filing_date"],
-            "report_date": filing["report_date"],
-            "document_url": document_url,
+            "form": current["form"],
+            "accession_number": current["accession_number"],
+            "filing_date": current["filing_date"],
+            "report_date": current["report_date"],
+            "document_url": current["document_url"],
             "mdna_source": mdna["source"],
             "mdna_url": mdna["url"],
             "risk_factors_found": risk_factors is not None,
@@ -109,6 +139,7 @@ def run_pipeline(query: str) -> dict:
             "segments": verify.segment_check(segments, fin and fin["kpis"]["revenue"]),
         },
         "financials": fin,
+        "changes": changes,
         "warnings": warnings,
     }
 

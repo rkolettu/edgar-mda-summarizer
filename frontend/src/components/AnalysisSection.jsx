@@ -1,7 +1,7 @@
 import { CircleAlert, CircleCheck } from 'lucide-react'
 import { STATUS } from '../lib/colors'
 
-export function Evidence({ quote, verified }) {
+export function Evidence({ quote, verified, where = 'filing' }) {
   if (!quote) {
     return (
       <p className="mt-2 flex items-center gap-1.5 text-xs text-muted">
@@ -15,7 +15,7 @@ export function Evidence({ quote, verified }) {
     <details className="group mt-2 text-xs">
       <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 text-muted select-none hover:text-ink-2">
         <Icon size={13} style={{ color: verified ? STATUS.good : STATUS.warning }} aria-hidden />
-        {verified ? 'Quote verified in filing' : 'Quote not found verbatim in filing'}
+        {verified ? `Quote verified in ${where}` : `Quote not found verbatim in ${where}`}
         <span className="text-accent group-open:hidden">· Show source</span>
         <span className="hidden text-accent group-open:inline">· Hide source</span>
       </summary>

@@ -2,6 +2,7 @@ import { ExternalLink, Info, Landmark, ShieldAlert, TrendingUp, TriangleAlert } 
 import { useState } from 'react'
 import AnalysisSection from './components/AnalysisSection'
 import CapitalDeploymentChart from './components/CapitalDeploymentChart'
+import ChangesSection from './components/ChangesSection'
 import KpiStrip from './components/KpiStrip'
 import LoadingState from './components/LoadingState'
 import RevenueMixChart from './components/RevenueMixChart'
@@ -185,6 +186,7 @@ export default function App() {
                     sourceNote={s.key === 'macro_risks' && data.filing.risk_factors_found ? 'MD&A + Item 1A Risk Factors' : null}
                   />
                 ))}
+                {data.changes && <ChangesSection changes={data.changes} />}
               </div>
               <aside className="space-y-6 lg:sticky lg:top-24 lg:self-start">
                 <RevenueMixChart data={data.charts?.revenue_segments ?? []} check={data.checks?.segments} />
