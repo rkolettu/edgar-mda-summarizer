@@ -90,6 +90,28 @@ def test_exhibit13_fallback(fake_sec):
     assert "Controls text" not in mdna["text"]
 
 
+def test_item7_points_to_inline_mdna_later_in_10k(fake_sec):
+    filing_text = text_of(
+        "<p>Item 7. Management's Discussion and Analysis of Financial Condition. 33 "
+        "Item 8. Financial Statements. 34</p>"
+        "<p>Item 7. Management's Discussion and Analysis of Financial Condition and Results of Operations. "
+        "Management's discussion and analysis appears on pages 46-160.</p>"
+        "<p>Item 8. Financial Statements and Supplementary Data.</p>"
+        "<p>Management's discussion and analysis</p>"
+        "<p>The following is Management's discussion and analysis of the financial condition and results of operations.</p>"
+        f"<p>{MDNA_BODY}</p>"
+        "<p>Management's report on internal control over financial reporting</p>"
+        "<p>Audited financial statements.</p>"
+    )
+    mdna = sec.extract_mdna(BANK_CIK, FILING, filing_text, "https://doc")
+    assert mdna["source"] == "item7"
+    assert mdna["url"] == "https://doc"
+    assert "Net sales increased 8%" in mdna["text"]
+    assert "Audited financial statements" not in mdna["text"]
+    assert "Management's discussion and analysis appears on pages" not in mdna["text"]
+    assert fake_sec.calls == []
+
+
 def test_exhibit_type_match_is_prefix(fake_sec):
     fake_sec.add_text(INDEX_URL, index_html([("Annual report", "/Archives/edgar/data/19617/000001961726000044/corp-ex13.htm", "EX-13.1")]))
     assert sec.find_exhibit(BANK_CIK, BANK_ACCESSION, "EX-13") == EX13_URL

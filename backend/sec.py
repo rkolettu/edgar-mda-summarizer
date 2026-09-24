@@ -36,6 +36,13 @@ ANNUAL_REPORT_MDNA_END = re.compile(
     r"management'?s\s+report\s+on\s+internal\s+control|report\s+of\s+independent\s+registered\s+public\s+accounting\s+firm",
     re.IGNORECASE,
 )
+# Some large filers put a short pointer under Item 7 and place the full MD&A later in
+# the same 10-K. Require the standalone heading followed by its opening sentence so
+# a table-of-contents entry or an Item 7 cross-reference cannot become the start.
+INLINE_MDNA_START = re.compile(
+    r"management'?s\s+discussion\s+and\s+analysis\s+the\s+following\s+is\s+management'?s\s+discussion\s+and\s+analysis\s+of\s+(?:the\s+)?financial\s+condition",
+    re.IGNORECASE,
+)
 # A heading reference inside prose ("see Item 8. Financial Statements", "discussed in Part II, Item 7. ...")
 # is not a section boundary.
 CROSS_REFERENCE = re.compile(
@@ -258,6 +265,10 @@ def extract_mdna(cik: int, filing: dict, filing_text: str, document_url: str) ->
     item7 = extract_item7(filing_text)
     if item7:
         return {"text": item7, "source": "item7", "url": document_url}
+
+    inline = extract_section(filing_text, INLINE_MDNA_START, ANNUAL_REPORT_MDNA_END)
+    if inline:
+        return {"text": inline, "source": "item7", "url": document_url}
 
     # Some filers (often banks) incorporate MD&A by reference to the annual report filed as Exhibit 13.
     exhibit_url = find_exhibit(cik, filing["accession_number"], "EX-13")
