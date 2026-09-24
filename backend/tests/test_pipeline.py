@@ -97,6 +97,23 @@ def test_missing_gemini_key(fake_sec, monkeypatch):
     assert "GEMINI_API_KEY" in res.json()["detail"]
 
 
+def test_gemini_usage_limit_has_actionable_message(client, fake_gemini):
+    original = fake_gemini.generate_content
+
+    def exhausted(model, contents, config):
+        if config.response_schema is analysis.Analysis:
+            error = RuntimeError("RESOURCE_EXHAUSTED: Quota exceeded")
+            error.code = 429
+            raise error
+        return original(model, contents, config)
+
+    fake_gemini.generate_content = exhausted
+    res = client.get("/api/summarize", params={"ticker": "AAPL"})
+    assert res.status_code == 429
+    assert "my Gemini API key" in res.json()["detail"]
+    assert "about 3 hours" in res.json()["detail"]
+
+
 def test_insights_carry_verified_flag(client):
     summary = client.get("/api/summarize", params={"ticker": "AAPL"}).json()["summary"]
     assert summary["revenue_drivers"][0]["verified"] is True

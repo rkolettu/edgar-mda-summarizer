@@ -105,6 +105,17 @@ def reset_client() -> None:
         _client = None
 
 
+def is_usage_limit_error(exc: Exception) -> bool:
+    status = str(getattr(exc, "status", "")).upper()
+    message = str(exc).lower()
+    return (
+        getattr(exc, "code", None) == 429
+        or status == "RESOURCE_EXHAUSTED"
+        or "resource_exhausted" in message
+        or "quota exceeded" in message
+    )
+
+
 def generate(system_prompt: str, contents: str, schema: type[BaseModel]) -> BaseModel:
     try:
         client = get_client()
@@ -120,6 +131,11 @@ def generate(system_prompt: str, contents: str, schema: type[BaseModel]) -> Base
     except HTTPException:
         raise
     except Exception as exc:
+        if is_usage_limit_error(exc):
+            raise HTTPException(
+                status_code=429,
+                detail="This app uses my Gemini API key and has reached its usage limit. Please try again in about 3 hours.",
+            ) from exc
         raise HTTPException(status_code=502, detail=f"Gemini request failed: {exc}") from exc
 
     try:

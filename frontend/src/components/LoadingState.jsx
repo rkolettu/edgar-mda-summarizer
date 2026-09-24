@@ -35,10 +35,14 @@ export default function LoadingState({ ticker }) {
           <span className="relative inline-flex h-3 w-3 rounded-full bg-accent" />
         </div>
         <p className="text-sm font-medium text-ink">
-          Parsing SEC EDGAR Filings &amp; Generating Institutional Insights...
+          Reading SEC filings and generating analysis...
         </p>
         <p className="font-mono text-xs text-muted">
-          {ticker} · {elapsed}s elapsed · first run typically 20–40s, repeats are instant
+          {ticker} · {elapsed}s elapsed
+        </p>
+        <p className="max-w-lg text-xs leading-relaxed text-ink-2">
+          A first-time analysis can take a few minutes. This uses my Gemini API key; if its usage limit is reached,
+          please try again in about 3 hours.
         </p>
       </div>
 
