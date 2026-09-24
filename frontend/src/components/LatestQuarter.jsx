@@ -1,4 +1,4 @@
-import { CalendarClock, ExternalLink } from 'lucide-react'
+import { ExternalLink } from 'lucide-react'
 import { formatEps, formatUsd } from '../lib/format'
 import { Evidence } from './AnalysisSection'
 import { Delta, Tile } from './KpiStrip'
@@ -19,11 +19,10 @@ export default function LatestQuarter({ quarter }) {
     : []
 
   return (
-    <section className="mb-6 rounded-lg border border-line bg-panel">
-      <header className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-line px-5 py-3.5">
-        <CalendarClock size={17} className="text-accent" />
-        <h2 className="text-sm font-semibold tracking-wide text-ink uppercase">
-          Latest Quarter · {quarterLabel(metrics, filing.report_date)}
+    <section className="editorial-card mb-10 overflow-hidden rounded-2xl border border-line bg-panel">
+      <header className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-line px-5 py-4 sm:px-6">
+        <h2 className="text-base font-semibold tracking-[-0.025em] text-ink">
+          Latest quarter · {quarterLabel(metrics, filing.report_date)}
         </h2>
         <span className="text-xs text-muted">
           10-Q for the quarter ended {filing.report_date}, filed {filing.filing_date}
@@ -38,9 +37,9 @@ export default function LatestQuarter({ quarter }) {
         </a>
       </header>
 
-      <div className="grid grid-cols-1 gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+      <div className="grid grid-cols-1 gap-5 p-5 sm:p-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         {tiles.length ? (
-          <div className="grid grid-cols-1 gap-3 self-start sm:grid-cols-3 lg:grid-cols-1">
+          <div className="grid grid-cols-1 self-start border-t border-line sm:grid-cols-3 lg:grid-cols-1">
             {tiles.map((t) => (
               <Tile key={t.key} label={t.label} value={t.value} sub={<Delta value={t.growth} />} />
             ))}

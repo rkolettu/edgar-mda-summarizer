@@ -1,4 +1,4 @@
-import { ArrowLeftRight, ExternalLink, GitCompareArrows, Minus, Plus } from 'lucide-react'
+import { ArrowLeftRight, ExternalLink, Minus, Plus } from 'lucide-react'
 import { fiscalYearLabel } from '../lib/format'
 import { Evidence } from './AnalysisSection'
 
@@ -21,12 +21,11 @@ function TypeTag({ type }) {
 export default function ChangesSection({ changes }) {
   const prior = changes.prior_filing
   return (
-    <section className="rounded-lg border border-line bg-panel">
-      <header className="flex items-center gap-2.5 border-b border-line px-5 py-3.5">
-        <GitCompareArrows size={17} className="text-accent" />
-        <h2 className="text-sm font-semibold tracking-wide text-ink uppercase">
-          What Changed vs. {fiscalYearLabel(prior.report_date)} 10-K
-        </h2>
+    <section className="editorial-card overflow-hidden rounded-2xl border border-line bg-panel">
+      <header className="flex flex-wrap items-center gap-2.5 border-b border-line px-5 py-4 sm:px-6">
+        <h3 className="text-base font-semibold tracking-[-0.025em] text-ink">
+          What changed vs. {fiscalYearLabel(prior.report_date)} 10-K
+        </h3>
         <a
           href={prior.document_url}
           target="_blank"
@@ -38,11 +37,11 @@ export default function ChangesSection({ changes }) {
       </header>
 
       {changes.items.length === 0 ? (
-        <p className="px-5 py-4 text-sm text-muted">No material changes identified.</p>
+        <p className="px-5 py-4 text-sm text-muted sm:px-6">No material changes identified.</p>
       ) : (
         <ol className="divide-y divide-line">
           {changes.items.map((item, i) => (
-            <li key={i} className="px-5 py-4">
+            <li key={i} className="px-5 py-5 sm:px-6">
               <div className="flex flex-wrap items-center gap-2">
                 <TypeTag type={item.change_type} />
                 <h3 className="text-[15px] leading-snug font-semibold text-ink">{item.headline}</h3>

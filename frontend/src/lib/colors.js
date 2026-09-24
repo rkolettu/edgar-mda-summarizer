@@ -1,21 +1,21 @@
-// Validated (colorblind + normal-vision separation, all pairs) against the #11161d panel surface.
+// Distinct chart series against the warm paper surface.
 export const SERIES = {
-  blue: '#3987e5',
-  orange: '#d95926',
-  aqua: '#199e70',
+  blue: '#355e99',
+  orange: '#b3754f',
+  aqua: '#4c7f72',
 }
 
 export const CHART_CHROME = {
-  grid: '#1f2630',
-  axis: '#2a323e',
-  tick: '#6b7684',
-  label: '#aab3c0',
-  surface: '#11161d',
+  grid: '#ebe7df',
+  axis: '#d2cdc4',
+  tick: '#6c6963',
+  label: '#575650',
+  surface: '#fffefa',
 }
 
 // Status colors carry meaning (good / bad) and always ship with an icon and a sign, never color alone.
 export const STATUS = {
-  good: '#0ca30c',
-  warning: '#fab219',
-  critical: '#e66767',
+  good: '#287252',
+  warning: '#946819',
+  critical: '#a43e39',
 }

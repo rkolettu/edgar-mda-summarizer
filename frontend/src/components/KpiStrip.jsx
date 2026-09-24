@@ -16,9 +16,9 @@ export function Delta({ value, suffix = 'YoY' }) {
 
 export function Tile({ label, value, sub }) {
   return (
-    <div className="min-w-0 rounded-lg border border-line bg-panel px-4 py-3.5">
-      <div className="truncate text-[11px] font-medium tracking-wide text-muted uppercase">{label}</div>
-      <div className="mt-1.5 truncate text-xl font-semibold text-ink">{value}</div>
+    <div className="min-w-0 border-b border-line px-3 py-5 sm:px-4">
+      <div className="truncate text-[11px] font-semibold tracking-[0.08em] text-muted uppercase">{label}</div>
+      <div className="mt-2 truncate text-2xl font-semibold tracking-[-0.04em] text-ink">{value}</div>
       <div className="mt-1 min-h-4 truncate text-xs text-ink-2">{sub}</div>
     </div>
   )
@@ -37,12 +37,12 @@ export default function KpiStrip({ kpis }) {
 
   return (
     <section aria-label="Key financials" className="mb-6">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+      <div className="grid grid-cols-2 border-t border-line md:grid-cols-3 xl:grid-cols-6">
         {tiles.map((t) => (
           <Tile key={t.label} {...t} />
         ))}
       </div>
-      <p className="mt-2 text-[11px] text-muted">Source: audited XBRL financial data filed with the SEC.</p>
+      <p className="mt-3 text-[11px] text-muted">Source: XBRL financial data filed with the SEC.</p>
     </section>
   )
 }
