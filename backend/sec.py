@@ -21,14 +21,14 @@ MIN_SECTION_CHARS = 2_000
 FOREIGN_MDNA_CHARS = 120_000
 
 SEP = r"\s*[.:\-–—]?\s*"
-ITEM7_START = re.compile(rf"it\s*em\s*7{SEP}management'?s\s+discussion\s+and\s+analysis", re.IGNORECASE)
-ITEM7_END = re.compile(r"it\s*em\s*(?:7a\s*[.:\-–—]?\s+quantitative|8\s*(?:[.:\-–—]|\s+financial\s+statements))", re.IGNORECASE)
-ITEM1A_START = re.compile(rf"it\s*em\s*1a{SEP}risk\s+factors", re.IGNORECASE)
+ITEM7_START = re.compile(rf"i\s*t\s*e\s*m\s*7{SEP}management'?s\s+discussion\s+and\s+analysis", re.IGNORECASE)
+ITEM7_END = re.compile(r"i\s*t\s*e\s*m\s*(?:7a\s*[.:\-–—]?\s+quantitative|8\s*(?:[.:\-–—]|\s+financial\s+statements))", re.IGNORECASE)
+ITEM1A_START = re.compile(rf"i\s*t\s*e\s*m\s*1a{SEP}risk\s+factors", re.IGNORECASE)
 ITEM1A_END = re.compile(
-    rf"it\s*em\s*1b{SEP}unresolved\s+staff|it\s*em\s*1c{SEP}cybersecurity|it\s*em\s*2{SEP}properties", re.IGNORECASE
+    rf"i\s*t\s*e\s*m\s*1b{SEP}unresolved\s+staff|i\s*t\s*e\s*m\s*1c{SEP}cybersecurity|i\s*t\s*e\s*m\s*2{SEP}properties", re.IGNORECASE
 )
-TENQ_MDNA_START = re.compile(rf"item\s*2{SEP}management'?s\s+discussion\s+and\s+analysis", re.IGNORECASE)
-TENQ_MDNA_END = re.compile(rf"item\s*3{SEP}quantitative|item\s*4{SEP}controls\s+and\s+procedures", re.IGNORECASE)
+TENQ_MDNA_START = re.compile(rf"i\s*t\s*e\s*m\s*2{SEP}management'?s\s+discussion\s+and\s+analysis", re.IGNORECASE)
+TENQ_MDNA_END = re.compile(rf"i\s*t\s*e\s*m\s*3{SEP}quantitative|i\s*t\s*e\s*m\s*4{SEP}controls\s+and\s+procedures", re.IGNORECASE)
 ANNUAL_REPORT_MDNA_START = re.compile(
     r"management'?s\s+discussion\s+and\s+analysis\s+of\s+(?:the\s+)?(?:consolidated\s+)?(?:financial\s+condition|results)",
     re.IGNORECASE,
@@ -177,7 +177,7 @@ def html_to_text(html: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-ANY_ITEM_HEADING = re.compile(r"\bit\s*em\s*\d{1,2}[a-c]?\s*[.:\-–—]?\s", re.IGNORECASE)
+ANY_ITEM_HEADING = re.compile(r"\bi\s*t\s*e\s*m\s*\d{1,2}[a-c]?\s*[.:\-–—]?\s", re.IGNORECASE)
 TOC_WINDOW = 150
 
 

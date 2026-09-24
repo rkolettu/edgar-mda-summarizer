@@ -184,6 +184,17 @@ def test_split_item_heading_as_in_manhattan_associates():
     assert "Quantitative and Qualitative Disclosures" not in section
 
 
+def test_split_quarterly_heading_as_in_manhattan_associates():
+    text = text_of(
+        "<p>Item 2. Management's Discussion and Analysis 15 Item 3. Quantitative 28</p>"
+        f"<p>I tem 2. Management's Discussion and Analysis of Financial Condition and Results of Operations. {MDNA_BODY}</p>"
+        "<p>I tem 3. Quantitative and Qualitative Disclosures About Market Risk</p>"
+    )
+    section = sec.extract_section(text, sec.TENQ_MDNA_START, sec.TENQ_MDNA_END)
+    assert section.startswith("I tem 2. Management's Discussion")
+    assert "Quantitative and Qualitative Disclosures" not in section
+
+
 def test_ubs_20f_embedded_annual_report(fake_sec):
     filing = {"form": "20-F", "accession_number": "0001610520-26-000023", "primary_doc": "ubs.htm"}
     url = sec.archive_url(1610520, filing["accession_number"], filing["primary_doc"])
