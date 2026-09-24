@@ -32,7 +32,7 @@ export default function KpiStrip({ kpis }) {
     { label: 'Operating Margin', value: formatPct(kpis.operating_margin), sub: kpis.net_margin != null ? `Net margin ${formatPct(kpis.net_margin)}` : null },
     { label: 'Free Cash Flow', value: formatUsd(kpis.free_cash_flow), sub: kpis.fcf_margin != null ? `${formatPct(kpis.fcf_margin)} of revenue` : null },
     { label: 'Diluted EPS', value: formatEps(kpis.eps_diluted), sub: <Delta value={kpis.eps_growth} /> },
-    { label: 'Buybacks + Dividends', value: formatUsd(kpis.shareholder_returns), sub: kpis.cash != null ? `Cash ${formatUsd(kpis.cash)}` : null },
+    { label: 'Buybacks + divs', value: formatUsd(kpis.shareholder_returns), sub: kpis.cash != null ? `Cash ${formatUsd(kpis.cash)}` : null },
   ]
 
   return (
