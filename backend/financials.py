@@ -260,4 +260,4 @@ def reference_block(fin: dict | None, quarter: dict | None = None, years: int = 
             lines.append(f"- Quarter ended {quarter['period_end']}{label}: " + "; ".join(parts))
     if not lines:
         return None
-    return "REFERENCE FIGURES (from the company's audited SEC XBRL data; authoritative):\n" + "\n".join(lines)
+    return "REFERENCE FIGURES (from the company's SEC XBRL data; authoritative values):\n" + "\n".join(lines)

@@ -77,6 +77,13 @@ def test_untraceable_figures_flagged(index, text):
     assert [s["verified"] for s in check_figures(text, index)] == [False]
 
 
+def test_unrelated_numbers_cannot_verify_dollar_claims():
+    idx = FigureIndex()
+    idx.add_text("Operating margin was 75%. See page 51. The share price was $18.")
+    assert [s["verified"] for s in check_figures("$75B, $51B and $18B", idx)] == [False, False, False]
+    assert check_figures("$18", idx)[0]["verified"]
+
+
 def test_spans_point_at_the_figures():
     text = "Revenue grew to $215.9B while margins hit 72%."
     spans = check_figures(text, FigureIndex())

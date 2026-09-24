@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import re
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 
 SCALE_WORDS = {"thousand": 1e3, "million": 1e6, "billion": 1e9, "trillion": 1e12}
 SCALE_ABBR = {"K": 1e3, "M": 1e6, "mm": 1e6, "B": 1e9, "bn": 1e9, "T": 1e12, "tn": 1e12}
-# Filing tables usually state amounts in thousands or millions without a unit next to the number.
-TABLE_SCALES = (1.0, 1e3, 1e6, 1e9)
+# Filing tables can omit a unit on each number, but only use a scale when a nearby
+# table heading actually states it. An arbitrary page number or percentage is not
+# evidence for a dollar claim.
+TABLE_UNITS = re.compile(r"\b(?:in|amounts\s+in)\s+(thousands|millions|billions)\b", re.IGNORECASE)
+TABLE_WINDOW = 240
 
 NUMBER = r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?"
 DOLLAR_CLAIM = re.compile(
@@ -20,7 +23,7 @@ PERCENT = re.compile(
     r"(?P<unit>%|(?i:percentage\s+points?|percent|basis\s+points?|bps|pts?)\b)"
 )
 SOURCE_AMOUNT = re.compile(
-    rf"(?<![\w.])(?P<num>{NUMBER})"
+    rf"(?<![\w.])(?P<currency>\$)?\s?(?P<num>{NUMBER})"
     r"(?:\s*(?P<word>(?i:trillion|billion|million|thousand))\b|(?P<abbr>tn|bn|[TBM])\b)?"
 )
 
@@ -52,14 +55,27 @@ class FigureIndex:
             self._sorted = False
 
     def add_text(self, text: str) -> None:
-        for m in PERCENT.finditer(text):
+        percent_matches = list(PERCENT.finditer(text))
+        percent_starts = {m.start("num") for m in percent_matches}
+        table_headers = [(m.end(), SCALE_WORDS[m.group(1).lower().rstrip("s")]) for m in TABLE_UNITS.finditer(text)]
+        table_positions = [position for position, _ in table_headers]
+        for m in percent_matches:
             value, _ = _parse(m["num"])
             self.add_percent(value / 100 if _is_bps(m["unit"]) else value)
         for m in SOURCE_AMOUNT.finditer(text):
+            if m.start("num") in percent_starts:
+                continue
             value, _ = _parse(m["num"])
             scale = SCALE_WORDS.get((m["word"] or "").lower()) or SCALE_ABBR.get(m["abbr"] or "")
-            for s in (scale,) if scale else TABLE_SCALES:
-                self.add_amount(value * s)
+            if scale:
+                self.add_amount(value * scale)
+                continue
+            header = bisect_right(table_positions, m.start("num")) - 1
+            table_scale = table_headers[header][1] if header >= 0 and m.start("num") - table_positions[header] <= TABLE_WINDOW else None
+            if table_scale:
+                self.add_amount(value * table_scale)
+            elif m["currency"]:
+                self.add_amount(value)
 
     def _sort(self) -> None:
         if not self._sorted:
