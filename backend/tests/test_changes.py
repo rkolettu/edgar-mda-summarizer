@@ -52,7 +52,7 @@ def test_compare_gemini_failure_degrades_gracefully(client, fake_gemini):
     fake_gemini.generate_content = flaky
     body = get(client)
     assert body["changes"] is None
-    assert any("quota exceeded" in w for w in body["warnings"])
+    assert any("usage limit" in w and "about 3 hours" in w for w in body["warnings"])
 
 
 def test_only_one_10k_on_record(client, fake_sec):
