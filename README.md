@@ -28,9 +28,9 @@ npm run dev
 
 Open http://localhost:5173.
 
-## Deploying the frontend to Vercel
+## Deploying to Vercel
 
-- Root Directory: `frontend` (framework preset: Vite)
-- Environment variable: `VITE_API_URL` = public URL of the deployed backend (defaults to `http://localhost:8000`)
+Create two Vercel projects from this repo.
 
-The backend must be hosted somewhere publicly reachable (e.g. Render, Railway, Fly.io) with `GEMINI_API_KEY` set.
+1. Backend: set Root Directory to `backend`. Vercel detects FastAPI from `main.py` and `requirements.txt`. Add the environment variable `GEMINI_API_KEY`.
+2. Frontend: set Root Directory to `frontend` (framework preset: Vite). Add the environment variable `VITE_API_URL` = the backend's URL. It is read at build time, so redeploy after changing it.
