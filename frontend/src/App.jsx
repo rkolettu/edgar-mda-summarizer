@@ -17,6 +17,9 @@ const QUICK_TICKERS = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'JPM']
 const MDNA_SOURCE_LABELS = {
   item7: 'Item 7 MD&A',
   exhibit13: 'Annual report MD&A (Exhibit 13)',
+  item5: 'Item 5 operating review',
+  operating_review: 'Annual report operating review',
+  mdna_exhibit: 'Management discussion exhibit',
 }
 
 const SECTIONS = [
@@ -35,12 +38,12 @@ function CompanyHeader({ data }) {
         <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
           <h1 className="break-words text-4xl leading-none font-semibold tracking-[-0.055em] text-ink sm:text-5xl">{data.company_name || data.ticker}</h1>
         </div>
-        <p className="mt-3 text-base text-ink-2">{fiscalYearLabel(filing.report_date)} annual filing · Management discussion &amp; analysis</p>
+        <p className="mt-3 text-base text-ink-2">{fiscalYearLabel(filing.report_date)} {filing.form} · Management discussion &amp; analysis</p>
       </div>
 
       <dl className="mt-7 flex flex-wrap items-center gap-x-7 gap-y-3 border-t border-line pt-4 text-xs">
         <div className="flex gap-1.5">
-          <dt className="text-muted">10-K filed</dt>
+          <dt className="text-muted">{filing.form} filed</dt>
           <dd className="font-mono text-ink">{filing.filing_date}</dd>
         </div>
         {data.generated_at && (
@@ -72,7 +75,7 @@ function CompanyHeader({ data }) {
             rel="noreferrer"
             className="flex items-center gap-1 font-medium text-accent hover:text-accent-hover"
           >
-            View MD&amp;A exhibit <ExternalLink size={12} />
+            View management discussion exhibit <ExternalLink size={12} />
           </a>
         )}
       </dl>
@@ -201,25 +204,25 @@ export default function App() {
               <p className="mb-1 text-[11px] font-semibold tracking-[0.14em] text-muted uppercase">Management commentary</p>
               <h2 className="text-2xl font-semibold tracking-[-0.04em] text-ink">Inside the filing</h2>
             </div>
-            <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
+            <div className={data.filing.currency === 'CAD' || data.filing.currency === 'unknown' ? 'grid grid-cols-1 gap-5' : 'grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]'}>
               <div className="space-y-5">
                 {SECTIONS.map((s) => (
                   <AnalysisSection
                     key={s.key}
                     title={s.title}
                     insights={data.summary?.[s.key] ?? []}
-                    sourceNote={s.key === 'macro_risks' && data.filing.risk_factors_found ? 'MD&A + Item 1A Risk Factors' : null}
+                    sourceNote={s.key === 'macro_risks' && data.filing.risk_factors_found ? `Management discussion + ${data.filing.form === '10-K' ? 'Item 1A ' : ''}Risk Factors` : null}
                   />
                 ))}
                 {data.changes && <ChangesSection changes={data.changes} />}
               </div>
-              <aside className="space-y-5">
+              {data.filing.currency !== 'CAD' && data.filing.currency !== 'unknown' && <aside className="space-y-5">
                 <RevenueMixChart data={data.charts?.revenue_segments ?? []} check={data.checks?.segments} />
                 <CapitalDeploymentChart
                   data={data.charts?.capital_deployment ?? []}
                   source={data.charts?.capital_deployment_source}
                 />
-              </aside>
+              </aside>}
             </div>
           </>
         )}

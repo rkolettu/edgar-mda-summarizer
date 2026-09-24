@@ -1,20 +1,20 @@
-# item7-extractor
+# SEC filing research
 
-Pulls the latest 10-K for a ticker from SEC EDGAR, extracts Item 7 (MD&A), and uses Gemini 2.5 Flash to summarize revenue drivers, capital allocation, and macro risks.
+Pulls the latest annual 10-K, 20-F, or 40-F for a ticker from SEC EDGAR, isolates management's discussion, and uses Gemini 2.5 Flash to summarize revenue drivers, capital allocation, and macro risks.
 
 - `backend/`: FastAPI app serving `GET /api/summarize?ticker=AAPL` (accepts a ticker or company name) and `GET /api/search?q=apple` (autocomplete)
 - `frontend/`: React + Vite + Tailwind CSS v4
 
 ## What it produces
 
-- Summary tiles and 5-year revenue, free cash flow and margin trends from the SEC's structured XBRL data (`data.sec.gov` companyfacts)
-- An AI-assisted research memo from the 10-K's Item 7 MD&A (or the Exhibit 13 annual report when Item 7 is incorporated by reference) and Item 1A Risk Factors, with each insight's source quote checked against the filing
+- For 10-Ks, summary tiles and 5-year revenue, free cash flow and margin trends from the SEC's structured XBRL data (`data.sec.gov` companyfacts)
+- An AI-assisted research memo from the 10-K's Item 7 MD&A (or Exhibit 13), a 20-F operating review, or a 40-F management discussion exhibit, with each insight's source quote checked against the filing
 - Revenue segments reconciled against reported revenue, and capital deployment from the cash flow statement
-- What changed versus the prior year's 10-K
-- A latest-quarter update from the most recent 10-Q filed after the 10-K
+- What changed versus the prior year's filing of the same form, when available
+- For 10-Ks, a latest-quarter update from the most recent 10-Q filed after the 10-K
 - Results cached per filing set in memory and at Vercel's CDN (`s-maxage=86400`)
 
-When the app cannot isolate MD&A, it returns an error rather than summarizing an unrelated portion of the filing.
+Foreign issuer filing layouts vary. The app recognizes embedded operating reviews in 20-Fs and referenced management discussion exhibits in 40-Fs; when it cannot verify the section, it returns an error rather than summarizing unrelated material. XBRL trend cards are currently limited to 10-Ks, and Canadian-dollar charts are omitted because their schema assumes US dollars. This app does not yet analyze foreign issuers' 6-K interim filings.
 
 How the AI analysis is checked:
 

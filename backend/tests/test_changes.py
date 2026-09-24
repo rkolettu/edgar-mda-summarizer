@@ -14,6 +14,7 @@ def test_changes_compare_latest_and_prior_filings(client, fake_gemini):
     assert "supply constraints" in call["contents"].split("BEGIN PRIOR")[1]
     assert "--- BEGIN PRIOR 10-K RISK FACTORS ---" in call["contents"]
     assert body["changes"]["prior_filing"] == {
+        "form": "10-K",
         "filing_date": "2024-11-01",
         "report_date": "2024-09-28",
         "document_url": APPLE_PRIOR_10K_URL,
