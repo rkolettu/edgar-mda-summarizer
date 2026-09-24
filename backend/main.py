@@ -13,12 +13,10 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, ValidationError
 
-SEC_HEADERS = {"User-Agent": "RishabKolettu InvestmentResearch (rishab@example.com)"}
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{padded_cik}.json"
 DOCUMENT_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{primary_doc}"
 GEMINI_MODEL = "gemini-2.5-flash"
-FALLBACK_CHARS = 100_000
 MIN_SECTION_CHARS = 2_000
 REQUEST_TIMEOUT = 30
 
@@ -41,10 +39,10 @@ SYSTEM_PROMPT = """
 You are an elite buy-side equity analyst. Analyze the 10-K MD&A section and output a strict JSON response.
 
 CRITICAL RULES:
-1. DEPTH OVER BREVITY: Do not use one-line bullets. For each category, provide 3 to 4 detailed insights. Each insight must have a punchy "headline" and a "detail" paragraph (2-3 sentences). The detail must include specific numbers, margin impacts, year-over-year changes, and management's forward-looking context.
+1. Give up to 4 substantive insights per category, each with a headline and 2-3 sentence detail. Only include numbers, comparisons and management outlook that appear in the supplied text. If the text does not support an insight, return fewer insights or an empty array.
 2. ABBREVIATE NUMBERS: Convert large numbers to billions/millions (e.g., "$109.1B").
 3. SYNTHESIZE: Group related metrics together so the analysis reads like a professional investment memo.
-4. EXTRACT CHART DATA: Pull the quantitative revenue segment mix and capital allocation mix into the data arrays.
+4. CHART DATA: Use only explicitly reported amounts. All chart values MUST be in USD billions (e.g. $750 million = 0.75). Revenue segments must be mutually exclusive parts of the same period's revenue; do not mix segment and product totals or include a total as a segment. Capital deployment values must be distinct actual spending categories for the same fiscal year, not authorizations or forecasts. Use empty arrays if comparable figures or units are unavailable. Never invent values.
 
 Output EXACTLY this JSON format:
 {
@@ -103,8 +101,14 @@ class Analysis(BaseModel):
 
 
 def sec_get(url: str) -> requests.Response:
+    user_agent = os.environ.get("SEC_USER_AGENT", "").strip()
+    if not user_agent:
+        raise HTTPException(
+            status_code=500,
+            detail="SEC_USER_AGENT is not configured. Set it to your application name and contact email.",
+        )
     try:
-        resp = requests.get(url, headers=SEC_HEADERS, timeout=REQUEST_TIMEOUT)
+        resp = requests.get(url, headers={"User-Agent": user_agent}, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
     except requests.RequestException as exc:
         raise HTTPException(status_code=502, detail=f"SEC request failed for {url}: {exc}") from exc
@@ -283,11 +287,14 @@ def run_pipeline(query: str) -> dict:
 
     text = html_to_text(sec_get(document_url).text)
     item7 = extract_item7(text)
-    extraction_method = "item7" if item7 else "fallback"
-    mdna_text = item7 if item7 else text[:FALLBACK_CHARS]
+    if item7 is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Could not isolate Item 7 in this filing. Open the source filing to review it directly.",
+        )
 
     company_name = filing["company_name"] or title
-    analysis = summarize(company_name, ticker, mdna_text)
+    analysis = summarize(company_name, ticker, item7)
 
     return {
         "ticker": ticker,
@@ -296,7 +303,7 @@ def run_pipeline(query: str) -> dict:
         "report_date": filing["report_date"],
         "accession_number": filing["accession_number"],
         "document_url": document_url,
-        "extraction_method": extraction_method,
+        "extraction_method": "item7",
         **analysis.model_dump(),
     }
 
