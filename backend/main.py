@@ -10,6 +10,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 import analysis
+import figures
 import financials
 import sec
 import verify
@@ -121,41 +122,55 @@ def find_newer_10q(submissions: dict, tenk: dict) -> dict | None:
     return tenqs[0] if tenqs and tenqs[0]["filing_date"] > tenk["filing_date"] else None
 
 
+def filing_texts(tenk: dict) -> list[str]:
+    return [tenk["mdna"]["text"], tenk["risk_factors"] or ""]
+
+
 def filing_source(tenk: dict) -> str:
-    return verify.normalize(f"{tenk['mdna']['text']}\n{tenk['risk_factors'] or ''}")
+    return verify.normalize("\n".join(filing_texts(tenk)))
 
 
-def build_changes(company_name: str, ticker: str, current: dict, prior_future: Future | None) -> Section:
+def figure_index(texts: list[str], fin: dict | None, quarter: dict | None = None) -> figures.FigureIndex:
+    index = figures.FigureIndex()
+    for text in texts:
+        index.add_text(text)
+    figures.add_financials(index, fin)
+    figures.add_quarter(index, quarter)
+    return index
+
+
+def build_changes(company_name: str, ticker: str, current: dict, prior_future: Future | None, fin: dict | None) -> Section:
     if prior_future is None:
         return Section(None, ["No prior-year 10-K found; the year-over-year comparison is unavailable."])
     try:
         prior = prior_future.result()
-        result = analysis.compare(company_name, ticker, current, prior)
+        result = analysis.compare(company_name, ticker, current, prior, financials.reference_block(fin))
     except Exception as exc:
         return Section(None, [f"Year-over-year comparison unavailable: {error_detail(exc)}"], degraded=True)
 
     sources = {"current": filing_source(current), "prior": filing_source(prior)}
+    index = figure_index(filing_texts(current) + filing_texts(prior), fin)
     items = [
-        {
-            **c.model_dump(),
-            "verified": verify.quote_in_source(c.evidence, sources["prior" if c.change_type == "removed" else "current"]),
-        }
+        verify.annotate_item(c.model_dump(), sources["prior" if c.change_type == "removed" else "current"], index)
         for c in result.changes
     ]
     prior_filing = {k: prior[k] for k in ("filing_date", "report_date", "document_url")}
     return Section({"prior_filing": prior_filing, "items": items})
 
 
-def build_latest_quarter(company_name: str, ticker: str, tenq_future: Future | None, facts_future: Future) -> Section:
+def build_latest_quarter(
+    company_name: str, ticker: str, tenq_future: Future | None, companyfacts: dict, fin: dict | None
+) -> Section:
     if tenq_future is None:
         return Section()
     try:
         tenq = tenq_future.result()
-        result = analysis.summarize_quarter(company_name, ticker, tenq)
+        metrics = financials.build_quarter(companyfacts, tenq["report_date"])
+        result = analysis.summarize_quarter(company_name, ticker, tenq, financials.reference_block(fin, metrics, years=1))
     except Exception as exc:
         return Section(None, [f"Latest 10-Q update unavailable: {error_detail(exc)}"], degraded=True)
 
-    companyfacts, _ = facts_future.result()
+    index = figure_index([tenq["mdna"]["text"]], fin, metrics)
     return Section({
         "filing": {
             "form": tenq["form"],
@@ -164,9 +179,9 @@ def build_latest_quarter(company_name: str, ticker: str, tenq_future: Future | N
             "document_url": tenq["document_url"],
             "mdna_source": tenq["mdna"]["source"],
         },
-        "metrics": financials.build_quarter(companyfacts, tenq["report_date"]),
+        "metrics": metrics,
         "highlights": verify.annotate(
-            [h.model_dump() for h in result.highlights], verify.normalize(tenq["mdna"]["text"])
+            [h.model_dump() for h in result.highlights], verify.normalize(tenq["mdna"]["text"]), index
         ),
     })
 
@@ -196,12 +211,17 @@ def run_pipeline(query: str) -> tuple[dict, bool]:
         facts_future = pool.submit(load_companyfacts, cik)
 
         current = current_future.result()
-        summary_future = pool.submit(
-            analysis.summarize, company_name, ticker, current["mdna"]["text"], current["risk_factors"]
-        )
-        changes_future = pool.submit(build_changes, company_name, ticker, current, prior_future)
-        quarter_future = pool.submit(build_latest_quarter, company_name, ticker, tenq_future, facts_future)
+        # Financials come first so every Gemini call can be given the authoritative figures.
         fin_section = build_financials(facts_future, current["report_date"])
+        fin = fin_section.value
+        summary_future = pool.submit(
+            analysis.summarize, company_name, ticker, current["mdna"]["text"], current["risk_factors"],
+            financials.reference_block(fin),
+        )
+        changes_future = pool.submit(build_changes, company_name, ticker, current, prior_future, fin)
+        quarter_future = pool.submit(
+            build_latest_quarter, company_name, ticker, tenq_future, facts_future.result()[0], fin
+        )
 
         result = summary_future.result()
         changes, quarter = changes_future.result(), quarter_future.result()
@@ -209,7 +229,7 @@ def run_pipeline(query: str) -> tuple[dict, bool]:
         # Don't hold the response for optional work if the main analysis failed.
         pool.shutdown(wait=False, cancel_futures=True)
 
-    mdna, risk_factors, fin = current["mdna"], current["risk_factors"], fin_section.value
+    mdna, risk_factors = current["mdna"], current["risk_factors"]
     warnings: list[str] = []
     for section in (fin_section, changes, quarter):
         warnings.extend(section.warnings)
@@ -223,8 +243,9 @@ def run_pipeline(query: str) -> tuple[dict, bool]:
         deployment_source = "gemini"
 
     normalized_source = filing_source(current)
+    index = figure_index(filing_texts(current), fin)
     summary = {
-        key: verify.annotate([i.model_dump() for i in insights], normalized_source)
+        key: verify.annotate([i.model_dump() for i in insights], normalized_source, index)
         for key, insights in result.summary
     }
 

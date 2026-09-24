@@ -187,3 +187,77 @@ def build_quarter(companyfacts: dict, period_end: str) -> dict | None:
             result["fiscal_period"] = result["fiscal_period"] or current.get("fp")
             result["fiscal_year"] = result["fiscal_year"] or current.get("fy")
     return result if found else None
+
+
+REFERENCE_FIELDS = [
+    ("revenue", "Revenue"),
+    ("gross_profit", "Gross profit"),
+    ("operating_income", "Operating income"),
+    ("net_income", "Net income"),
+    ("operating_cash_flow", "Operating cash flow"),
+    ("capex", "Capital expenditures"),
+    ("free_cash_flow", "Free cash flow (operating cash flow minus capital expenditures)"),
+    ("buybacks", "Share repurchases (cash paid)"),
+    ("dividends", "Dividends paid"),
+    ("rnd", "R&D expense"),
+    ("acquisitions", "Acquisitions, net of cash acquired"),
+    ("debt_repayment", "Debt repayments"),
+    ("eps_diluted", "Diluted EPS"),
+    ("cash", "Cash and cash equivalents at period end"),
+    ("long_term_debt", "Long-term debt at period end"),
+]
+
+
+def format_usd(value: float) -> str:
+    sign, v = ("-" if value < 0 else ""), abs(value)
+    if v >= 1e12:
+        return f"{sign}${v / 1e12:.2f}T"
+    if v >= 1e9:
+        return f"{sign}${v / 1e9:.1f}B"
+    if v >= 1e6:
+        return f"{sign}${v / 1e6:.0f}M"
+    return f"{sign}${v:,.2f}"
+
+
+def _pct(fraction: float) -> str:
+    return f"{fraction * 100:+.1f}%" if fraction is not None else ""
+
+
+def reference_block(fin: dict | None, quarter: dict | None = None, years: int = 2) -> str | None:
+    """Authoritative XBRL figures for the prompt, rounded the same way the model is asked to write them."""
+    lines = []
+    if fin:
+        for row in fin["years"][-years:]:
+            parts = [f"{label} {format_usd(row[key])}" for key, label in REFERENCE_FIELDS if row.get(key)]
+            lines.append(f"- Fiscal year ended {row['period_end']}: " + "; ".join(parts))
+        k = fin["kpis"]
+        derived = [
+            (label, k[key], signed)
+            for key, label, signed in (
+                ("revenue_growth", "revenue growth year over year", True),
+                ("gross_margin", "gross margin", False),
+                ("operating_margin", "operating margin", False),
+                ("net_margin", "net margin", False),
+                ("fcf_margin", "free cash flow margin", False),
+                ("eps_growth", "diluted EPS growth year over year", True),
+            )
+            if k.get(key) is not None
+        ]
+        if derived:
+            lines.append(
+                f"- Derived for fiscal year ended {k['period_end']}: "
+                + "; ".join(f"{label} {_pct(v) if signed else f'{v * 100:.1f}%'}" for label, v, signed in derived)
+            )
+    if quarter:
+        label = f" ({quarter['fiscal_period']} FY{quarter['fiscal_year']})" if quarter.get("fiscal_period") else ""
+        parts = []
+        for key, name in (("revenue", "Revenue"), ("net_income", "Net income"), ("eps_diluted", "Diluted EPS")):
+            if quarter.get(key) is not None:
+                growth = quarter.get(f"{key}_growth")
+                suffix = f" ({_pct(growth)} vs. the same quarter last year)" if growth is not None else ""
+                parts.append(f"{name} {format_usd(quarter[key])}{suffix}")
+        if parts:
+            lines.append(f"- Quarter ended {quarter['period_end']}{label}: " + "; ".join(parts))
+    if not lines:
+        return None
+    return "REFERENCE FIGURES (from the company's audited SEC XBRL data; authoritative):\n" + "\n".join(lines)

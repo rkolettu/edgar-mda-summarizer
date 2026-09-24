@@ -38,7 +38,10 @@ def test_paraphrased_or_fabricated_quotes_fail(quote):
 
 def test_annotate_adds_verified_flag():
     out = annotate([{"headline": "h", "detail": "d", "evidence": "Gross margin percentage was 46.9%."}], SOURCE)
-    assert out == [{"headline": "h", "detail": "d", "evidence": "Gross margin percentage was 46.9%.", "verified": True}]
+    assert out == [{
+        "headline": "h", "detail": "d", "evidence": "Gross margin percentage was 46.9%.",
+        "verified": True, "figures": {"headline": [], "detail": []}, "status": "verified",
+    }]
 
 
 def test_segment_check_reconciles_within_tolerance():

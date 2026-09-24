@@ -21,6 +21,7 @@ CRITICAL RULES:
 4. CHART DATA: Use only explicitly disclosed amounts from the same fiscal year. Chart values MUST be in USD billions (e.g. $750 million = 0.75). Revenue segments must be mutually exclusive; never combine segment and product views or include a total as a segment. Capital deployment must use distinct actual cash outlays, not authorizations, forecasts, or operating expenses such as R&D. Return empty arrays when comparable data or units are unavailable. Never invent values.
 5. CITE EVIDENCE: Every insight must include an "evidence" field: one sentence copied VERBATIM from the filing text that supports the insight. Do not paraphrase, merge sentences, or change any number; the quote is checked against the filing.
 6. MACRO RISKS: When an Item 1A Risk Factors section is provided, draw macro_risks from both it and the MD&A. Prioritize risks management quantifies or describes as new or heightened, and skip generic boilerplate.
+7. REFERENCE FIGURES: When a REFERENCE FIGURES block is provided, it is authoritative; whenever you cite one of those metrics, use exactly the value shown there. Every dollar amount and percentage you write must appear in the supplied filing text or in REFERENCE FIGURES. Do not calculate new totals, ratios, or growth rates. Figures are checked automatically, and untraceable ones are flagged to the reader.
 
 Output EXACTLY this JSON format:
 {
@@ -126,6 +127,7 @@ def generate(system_prompt: str, contents: str, schema: type[BaseModel]) -> Base
                 system_instruction=system_prompt,
                 response_mime_type="application/json",
                 response_schema=schema,
+                temperature=0,
             ),
         )
     except HTTPException:
@@ -144,14 +146,18 @@ def generate(system_prompt: str, contents: str, schema: type[BaseModel]) -> Base
         raise HTTPException(status_code=502, detail=f"Gemini returned malformed JSON: {exc}") from exc
 
 
-def summarize(company_name: str, ticker: str, mdna_text: str, risk_factors: str | None) -> Analysis:
+def with_reference(contents: str, reference: str | None) -> str:
+    return f"{contents}\n\n{reference}" if reference else contents
+
+
+def summarize(company_name: str, ticker: str, mdna_text: str, risk_factors: str | None, reference: str | None = None) -> Analysis:
     contents = (
         f"Company: {company_name} ({ticker})\n\n"
         f"--- BEGIN 10-K MD&A ---\n{mdna_text}\n--- END 10-K MD&A ---"
     )
     if risk_factors:
         contents += f"\n\n--- BEGIN 10-K ITEM 1A RISK FACTORS ---\n{risk_factors}\n--- END 10-K ITEM 1A RISK FACTORS ---"
-    return generate(SYSTEM_PROMPT, contents, Analysis)
+    return generate(SYSTEM_PROMPT, with_reference(contents, reference), Analysis)
 
 
 COMPARE_PROMPT = """
@@ -163,6 +169,7 @@ CRITICAL RULES:
 3. DEPTH: Each change needs a punchy "headline" and a "detail" paragraph (2-3 sentences) explaining why it matters to an investor, with specific numbers where available.
 4. ABBREVIATE NUMBERS: Convert large numbers to billions/millions (e.g., "$109.1B").
 5. CITE EVIDENCE: "evidence" is one sentence copied VERBATIM from the LATEST filing, or from the PRIOR filing when change_type is "removed". Do not paraphrase or change any number; the quote is checked against the filing.
+6. REFERENCE FIGURES: When a REFERENCE FIGURES block is provided, it is authoritative; whenever you cite one of those metrics, use exactly the value shown there. Every dollar amount and percentage you write must appear in the supplied filing text or in REFERENCE FIGURES. Do not calculate new totals, ratios, or growth rates. Figures are checked automatically, and untraceable ones are flagged to the reader.
 
 Output EXACTLY this JSON format:
 {
@@ -199,12 +206,12 @@ def _filing_block(label: str, tenk: dict) -> str:
     return block
 
 
-def compare(company_name: str, ticker: str, latest: dict, prior: dict) -> Changes:
+def compare(company_name: str, ticker: str, latest: dict, prior: dict, reference: str | None = None) -> Changes:
     contents = (
         f"Company: {company_name} ({ticker})\n\n"
         f"{_filing_block('LATEST', latest)}\n\n{_filing_block('PRIOR', prior)}"
     )
-    result = generate(COMPARE_PROMPT, contents, Changes)
+    result = generate(COMPARE_PROMPT, with_reference(contents, reference), Changes)
     for change in result.changes:
         change.change_type = change.change_type.strip().lower()
         if change.change_type not in CHANGE_TYPES:
@@ -220,6 +227,7 @@ CRITICAL RULES:
 2. DEPTH: Each highlight needs a punchy "headline" and a "detail" paragraph (2-3 sentences) with specific numbers and year-over-year changes.
 3. ABBREVIATE NUMBERS: Convert large numbers to billions/millions (e.g., "$109.1B").
 4. CITE EVIDENCE: "evidence" is one sentence copied VERBATIM from the 10-Q text. Do not paraphrase or change any number; the quote is checked against the filing.
+5. REFERENCE FIGURES: When a REFERENCE FIGURES block is provided, it is authoritative; whenever you cite one of those metrics, use exactly the value shown there. Every dollar amount and percentage you write must appear in the supplied filing text or in REFERENCE FIGURES. Do not calculate new totals, ratios, or growth rates. Figures are checked automatically, and untraceable ones are flagged to the reader.
 
 Output EXACTLY this JSON format:
 {
@@ -234,9 +242,9 @@ class QuarterUpdate(BaseModel):
     highlights: list[Insight]
 
 
-def summarize_quarter(company_name: str, ticker: str, tenq: dict) -> QuarterUpdate:
+def summarize_quarter(company_name: str, ticker: str, tenq: dict, reference: str | None = None) -> QuarterUpdate:
     contents = (
         f"Company: {company_name} ({ticker})\n\n"
         f"--- BEGIN 10-Q MD&A (quarter ended {tenq['report_date']}) ---\n{tenq['mdna']['text']}\n--- END 10-Q MD&A ---"
     )
-    return generate(QUARTER_PROMPT, contents, QuarterUpdate)
+    return generate(QUARTER_PROMPT, with_reference(contents, reference), QuarterUpdate)

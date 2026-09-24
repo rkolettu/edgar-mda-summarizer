@@ -14,7 +14,16 @@ Pulls the latest 10-K for a ticker from SEC EDGAR, extracts Item 7 (MD&A), and u
 - A latest-quarter update from the most recent 10-Q filed after the 10-K
 - Results cached per filing set in memory and at Vercel's CDN (`s-maxage=86400`)
 
-When the app cannot isolate MD&A, it returns an error rather than summarizing an unrelated portion of the filing. A matching source quote confirms that the quoted words appear in the filing; it does not independently verify every statement in the AI analysis. Review the original filings before using the output in an investment decision.
+When the app cannot isolate MD&A, it returns an error rather than summarizing an unrelated portion of the filing.
+
+How the AI analysis is checked:
+
+- Gemini receives the company's audited SEC XBRL figures (revenue, margins, cash flows, buybacks, EPS, latest quarter) and is told to use those exact values and not to calculate new ones. It runs at temperature 0.
+- Every insight must quote one sentence from the filing. The quote is matched against the filing text.
+- Every dollar amount and percentage in an insight's headline and paragraph is matched against the numbers in the filing text (including tables stated in thousands or millions, respecting the stated precision) and the XBRL data, including the latest-year margins and growth rates derived from it.
+- Insights whose quote is not found are hidden by default. Figures that could not be traced are underlined.
+
+These checks confirm that each quote and figure appears in the source; they do not prove the AI used it in the right context. Review the original filings before using the output in an investment decision.
 
 ## Tests
 
