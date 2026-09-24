@@ -37,10 +37,69 @@ app.add_middleware(
 )
 
 
-class Item7Summary(BaseModel):
-    revenue_drivers: list[str]
-    capital_allocation: list[str]
-    macro_risks: list[str]
+SYSTEM_PROMPT = """
+You are an elite buy-side equity analyst. Analyze the 10-K MD&A section and output a strict JSON response.
+
+CRITICAL RULES:
+1. DEPTH OVER BREVITY: Do not use one-line bullets. For each category, provide 3 to 4 detailed insights. Each insight must have a punchy "headline" and a "detail" paragraph (2-3 sentences). The detail must include specific numbers, margin impacts, year-over-year changes, and management's forward-looking context.
+2. ABBREVIATE NUMBERS: Convert large numbers to billions/millions (e.g., "$109.1B").
+3. SYNTHESIZE: Group related metrics together so the analysis reads like a professional investment memo.
+4. EXTRACT CHART DATA: Pull the quantitative revenue segment mix and capital allocation mix into the data arrays.
+
+Output EXACTLY this JSON format:
+{
+  "summary": {
+    "revenue_drivers": [
+      {
+        "headline": "Strong Services Acceleration",
+        "detail": "Services revenue grew 14% to $109.1B, driven by high-margin App Store and cloud growth. This offset hardware softness and expanded overall gross margins."
+      }
+    ],
+    "capital_allocation": [
+      {
+        "headline": "Aggressive Share Repurchases",
+        "detail": "Management retired $89.3B in stock under the new $100B authorization. Additionally, R&D spend increased 10% to $34.5B to support infrastructure buildouts."
+      }
+    ],
+    "macro_risks": [
+      {
+        "headline": "Q2 Tariff Headwinds & FX Drag",
+        "detail": "..."
+      }
+    ]
+  },
+  "charts": {
+    "revenue_segments": [ {"name": "iPhone", "value": 209.5}, {"name": "Services", "value": 109.1} ],
+    "capital_deployment": [ {"name": "Buybacks", "value": 89.3}, {"name": "R&D", "value": 34.5} ]
+  }
+}
+"""
+
+
+class Insight(BaseModel):
+    headline: str
+    detail: str
+
+
+class Summary(BaseModel):
+    revenue_drivers: list[Insight]
+    capital_allocation: list[Insight]
+    macro_risks: list[Insight]
+
+
+class ChartPoint(BaseModel):
+    name: str
+    value: float
+
+
+class Charts(BaseModel):
+    revenue_segments: list[ChartPoint]
+    capital_deployment: list[ChartPoint]
+
+
+class Analysis(BaseModel):
+    summary: Summary
+    charts: Charts
 
 
 def sec_get(url: str) -> requests.Response:
@@ -76,6 +135,7 @@ def find_latest_10k(padded_cik: str) -> dict:
                 "accession_number": recent["accessionNumber"][i],
                 "primary_doc": recent["primaryDocument"][i],
                 "filing_date": recent["filingDate"][i],
+                "report_date": recent["reportDate"][i],
             }
     raise HTTPException(status_code=404, detail="No 10-K filing found in the company's recent submissions.")
 
@@ -111,32 +171,20 @@ def get_client() -> genai.Client:
     return client
 
 
-def summarize(company_name: str, ticker: str, mdna_text: str) -> Item7Summary:
-    prompt = (
-        "You are a senior buy-side equity analyst at a long/short fundamental hedge fund. "
-        f"Below is the Management's Discussion and Analysis (Item 7) from the latest 10-K of "
-        f"{company_name} ({ticker}).\n\n"
-        "Extract the following, each as a JSON array of concise, specific bullet-point strings "
-        "(4-7 bullets each). Cite concrete figures, growth rates, segments, and dollar amounts from "
-        "the filing wherever possible. Do not invent numbers.\n"
-        "- revenue_drivers: the key factors driving revenue growth or decline (segments, products, "
-        "pricing, volume, geography).\n"
-        "- capital_allocation: how management is deploying capital (buybacks, dividends, capex, "
-        "M&A, debt paydown/issuance, R&D, liquidity position).\n"
-        "- macro_risks: macroeconomic and external risks management highlights (rates, FX, "
-        "inflation, supply chain, regulation, geopolitics, demand environment).\n\n"
-        'Respond ONLY with a JSON object of the form {"revenue_drivers": [...], '
-        '"capital_allocation": [...], "macro_risks": [...]}.\n\n'
-        f"--- BEGIN ITEM 7 ---\n{mdna_text}\n--- END ITEM 7 ---"
+def summarize(company_name: str, ticker: str, mdna_text: str) -> Analysis:
+    contents = (
+        f"Company: {company_name} ({ticker})\n\n"
+        f"--- BEGIN 10-K MD&A ---\n{mdna_text}\n--- END 10-K MD&A ---"
     )
 
     try:
         response = get_client().models.generate_content(
             model=GEMINI_MODEL,
-            contents=prompt,
+            contents=contents,
             config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
                 response_mime_type="application/json",
-                response_schema=Item7Summary,
+                response_schema=Analysis,
             ),
         )
     except HTTPException:
@@ -145,7 +193,7 @@ def summarize(company_name: str, ticker: str, mdna_text: str) -> Item7Summary:
         raise HTTPException(status_code=502, detail=f"Gemini request failed: {exc}") from exc
 
     try:
-        return Item7Summary.model_validate(json.loads(response.text))
+        return Analysis.model_validate(json.loads(response.text))
     except (TypeError, json.JSONDecodeError, ValidationError) as exc:
         raise HTTPException(status_code=502, detail=f"Gemini returned malformed JSON: {exc}") from exc
 
@@ -177,16 +225,17 @@ def run_pipeline(ticker: str) -> dict:
     mdna_text = item7 if item7 else text[:FALLBACK_CHARS]
 
     company_name = filing["company_name"] or title
-    summary = summarize(company_name, ticker, mdna_text)
+    analysis = summarize(company_name, ticker, mdna_text)
 
     return {
         "ticker": ticker,
         "company_name": company_name,
         "filing_date": filing["filing_date"],
+        "report_date": filing["report_date"],
         "accession_number": filing["accession_number"],
         "document_url": document_url,
         "extraction_method": extraction_method,
-        **summary.model_dump(),
+        **analysis.model_dump(),
     }
 
 

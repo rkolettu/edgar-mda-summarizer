@@ -1,15 +1,19 @@
 @import "tailwindcss";
 
 @theme {
-  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --color-term-bg: #000000;
-  --color-term-panel: #0a0a0a;
-  --color-term-border: #2a2a2a;
-  --color-term-amber: #ffa028;
-  --color-term-green: #3ddc84;
-  --color-term-red: #ff4d4d;
-  --color-term-cyan: #4fc3f7;
-  --color-term-muted: #8a8a8a;
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-page: #0b0e13;
+  --color-panel: #11161d;
+  --color-panel-2: #161c25;
+  --color-line: #1f2630;
+  --color-ink: #ffffff;
+  --color-ink-2: #aab3c0;
+  --color-muted: #6b7684;
+  --color-accent: #3987e5;
+  --color-accent-hover: #5598e7;
+  --color-danger: #e66767;
 }
 
 html,
@@ -20,18 +24,12 @@ body,
 
 body {
   margin: 0;
-  background: var(--color-term-bg);
-  color: #e6e6e6;
-  font-family: var(--font-mono);
+  background: var(--color-page);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
 
-@keyframes blink {
-  50% {
-    opacity: 0;
-  }
-}
-
-.cursor-blink {
-  animation: blink 1s step-end infinite;
+.recharts-wrapper *:focus {
+  outline: none;
 }

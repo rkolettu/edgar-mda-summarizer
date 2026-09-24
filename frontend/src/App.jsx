@@ -1,95 +1,84 @@
-import { useEffect, useState } from 'react'
+import { ExternalLink, Landmark, ShieldAlert, TrendingUp, TriangleAlert } from 'lucide-react'
+import { useState } from 'react'
+import AnalysisSection from './components/AnalysisSection'
+import CapitalDeploymentChart from './components/CapitalDeploymentChart'
+import LoadingState from './components/LoadingState'
+import RevenueMixChart from './components/RevenueMixChart'
+import SearchHeader from './components/SearchHeader'
 
 const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '')
+const QUICK_TICKERS = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'JPM']
 
 const SECTIONS = [
-  { key: 'revenue_drivers', code: 'REV', title: 'Revenue Drivers', accent: 'text-term-green', bar: 'bg-term-green' },
-  { key: 'capital_allocation', code: 'CAP', title: 'Capital Allocation', accent: 'text-term-cyan', bar: 'bg-term-cyan' },
-  { key: 'macro_risks', code: 'RSK', title: 'Macro Risks', accent: 'text-term-red', bar: 'bg-term-red' },
+  { key: 'revenue_drivers', title: 'Revenue Drivers', icon: TrendingUp },
+  { key: 'capital_allocation', title: 'Capital Allocation', icon: Landmark },
+  { key: 'macro_risks', title: 'Macro Risks', icon: ShieldAlert },
 ]
 
-const LOADING_STEPS = [
-  'RESOLVING TICKER -> CIK',
-  'PULLING EDGAR SUBMISSIONS',
-  'DOWNLOADING LATEST 10-K',
-  'PARSING ITEM 7 (MD&A)',
-  'RUNNING GEMINI ANALYSIS',
-]
-
-function Clock() {
-  const [now, setNow] = useState(new Date())
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1000)
-    return () => clearInterval(id)
-  }, [])
-  return <span>{now.toLocaleTimeString('en-US', { hour12: false })}</span>
-}
-
-function LoadingPanel({ ticker }) {
-  const [elapsed, setElapsed] = useState(0)
-  useEffect(() => {
-    const id = setInterval(() => setElapsed((e) => e + 0.1), 100)
-    return () => clearInterval(id)
-  }, [])
-  const step = Math.min(Math.floor(elapsed / 2), LOADING_STEPS.length - 1)
+function CompanyHeader({ data }) {
+  const fiscalYear = data.report_date ? `FY${data.report_date.slice(0, 4)}` : 'FY'
+  const isItem7 = data.extraction_method === 'item7'
 
   return (
-    <div className="mx-auto mt-10 max-w-2xl border border-term-border bg-term-panel p-6">
-      <div className="mb-4 flex items-center justify-between text-xs">
-        <span className="text-term-amber">PROCESSING {ticker}</span>
-        <span className="text-term-muted">{elapsed.toFixed(1)}s</span>
+    <div className="mb-6 flex flex-col gap-3 border-b border-line pb-5 sm:flex-row sm:items-end sm:justify-between">
+      <div>
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight text-ink">{data.company_name || data.ticker}</h1>
+          <span className="rounded border border-line bg-panel px-1.5 py-0.5 font-mono text-xs text-ink-2">
+            {data.ticker}
+          </span>
+        </div>
+        <p className="mt-1 text-sm text-ink-2">{fiscalYear} MD&amp;A Analysis</p>
       </div>
-      <ul className="space-y-2 text-sm">
-        {LOADING_STEPS.map((label, i) => (
-          <li key={label} className="flex items-center gap-3">
-            <span
-              className={
-                i < step ? 'text-term-green' : i === step ? 'text-term-amber' : 'text-term-border'
-              }
-            >
-              {i < step ? '[OK]' : i === step ? '[..]' : '[  ]'}
-            </span>
-            <span className={i <= step ? 'text-gray-200' : 'text-term-muted'}>
-              {label}
-              {i === step && <span className="cursor-blink">_</span>}
-            </span>
-          </li>
-        ))}
-      </ul>
-      <div className="mt-5 h-1 w-full bg-term-border">
-        <div
-          className="h-1 bg-term-amber transition-all duration-100"
-          style={{ width: `${Math.min((elapsed / 12) * 100, 95)}%` }}
-        />
-      </div>
-      <p className="mt-3 text-xs text-term-muted">SEC fetch + Gemini analysis typically takes ~10s.</p>
+
+      <dl className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
+        {data.filing_date && (
+          <div className="flex gap-1.5">
+            <dt className="text-muted">10-K filed</dt>
+            <dd className="font-mono text-ink-2">{data.filing_date}</dd>
+          </div>
+        )}
+        <div className="flex gap-1.5">
+          <dt className="text-muted">Source</dt>
+          <dd className={isItem7 ? 'text-ink-2' : 'text-[#c98500]'}>
+            {isItem7 ? 'Item 7 MD&A' : 'Full filing (Item 7 not isolated)'}
+          </dd>
+        </div>
+        {data.document_url && (
+          <a
+            href={data.document_url}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1 text-accent hover:text-accent-hover"
+          >
+            View filing <ExternalLink size={12} />
+          </a>
+        )}
+      </dl>
     </div>
   )
 }
 
-function SectionPanel({ section, items }) {
+function EmptyState({ onPick }) {
   return (
-    <section className="flex flex-col border border-term-border bg-term-panel">
-      <header className="flex items-center justify-between border-b border-term-border bg-term-amber px-3 py-1.5 text-black">
-        <span className="text-xs font-bold tracking-widest">{section.title.toUpperCase()}</span>
-        <span className="text-xs font-bold">{section.code}</span>
-      </header>
-      <div className={`h-0.5 w-full ${section.bar}`} />
-      {items.length === 0 ? (
-        <p className="p-4 text-sm text-term-muted">No data returned.</p>
-      ) : (
-        <ul className="space-y-3 p-4">
-          {items.map((item, i) => (
-            <li key={i} className="flex gap-3 text-sm leading-relaxed">
-              <span className={`shrink-0 font-bold ${section.accent}`}>
-                {String(i + 1).padStart(2, '0')}
-              </span>
-              <span className="text-gray-200">{item}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+    <div className="mx-auto max-w-xl py-20 text-center">
+      <h1 className="text-2xl font-semibold tracking-tight text-ink">Institutional-grade 10-K MD&amp;A analysis</h1>
+      <p className="mt-3 text-sm leading-relaxed text-ink-2">
+        Enter a ticker to pull the latest 10-K from SEC EDGAR, isolate Item 7, and generate a buy-side memo on
+        revenue drivers, capital allocation, and macro risk.
+      </p>
+      <div className="mt-6 flex flex-wrap justify-center gap-2">
+        {QUICK_TICKERS.map((t) => (
+          <button
+            key={t}
+            onClick={() => onPick(t)}
+            className="rounded-md border border-line bg-panel px-3 py-1.5 font-mono text-xs text-ink-2 transition-colors hover:border-accent hover:text-ink"
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -100,11 +89,11 @@ export default function App() {
   const [error, setError] = useState('')
   const [data, setData] = useState(null)
 
-  async function handleSubmit(e) {
-    e.preventDefault()
-    const t = ticker.trim().toUpperCase()
+  async function runAnalysis(symbol) {
+    const t = symbol.trim().toUpperCase()
     if (!t || loading) return
 
+    setTicker(t)
     setActiveTicker(t)
     setLoading(true)
     setError('')
@@ -122,100 +111,58 @@ export default function App() {
     }
   }
 
+  function handleSubmit(e) {
+    e.preventDefault()
+    runAnalysis(ticker)
+  }
+
   return (
-    <div className="flex min-h-screen flex-col bg-term-bg">
-      <div className="flex items-center justify-between border-b border-term-border bg-term-panel px-4 py-1.5 text-xs">
-        <div className="flex items-center gap-4">
-          <span className="font-bold text-term-amber">ITEM7&lt;GO&gt;</span>
-          <span className="hidden text-term-muted sm:inline">SEC 10-K MD&amp;A EXTRACTOR</span>
-        </div>
-        <div className="flex items-center gap-4 text-term-muted">
-          <span className="flex items-center gap-1.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-term-green" />
-            LIVE
-          </span>
-          <Clock />
-        </div>
-      </div>
+    <div className="flex min-h-screen flex-col bg-page">
+      <SearchHeader ticker={ticker} onTickerChange={setTicker} onSubmit={handleSubmit} loading={loading} />
 
-      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-10">
-        <div className="text-center">
-          <h1 className="text-2xl font-bold tracking-widest text-term-amber sm:text-3xl">ITEM 7 EXTRACTOR</h1>
-          <p className="mt-2 text-xs tracking-wider text-term-muted">
-            MANAGEMENT&apos;S DISCUSSION &amp; ANALYSIS // BUY-SIDE SUMMARY
-          </p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="mx-auto mt-8 flex max-w-xl border border-term-amber">
-          <span className="flex items-center bg-term-amber px-3 text-sm font-bold text-black">&gt;</span>
-          <input
-            value={ticker}
-            onChange={(e) => setTicker(e.target.value.toUpperCase())}
-            placeholder="ENTER TICKER (e.g. AAPL)"
-            maxLength={10}
-            autoFocus
-            spellCheck={false}
-            className="min-w-0 flex-1 bg-black px-4 py-3 text-lg tracking-widest text-term-amber uppercase placeholder:text-term-muted placeholder:text-sm focus:outline-none"
-          />
-          <button
-            type="submit"
-            disabled={loading || !ticker.trim()}
-            className="bg-term-amber px-5 text-sm font-bold tracking-widest text-black transition-colors hover:bg-amber-300 disabled:cursor-not-allowed disabled:bg-term-border disabled:text-term-muted"
-          >
-            {loading ? 'WAIT' : 'GO'}
-          </button>
-        </form>
-
-        {loading && <LoadingPanel ticker={activeTicker} />}
+      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6">
+        {loading && <LoadingState ticker={activeTicker} />}
 
         {error && !loading && (
-          <div className="mx-auto mt-10 max-w-2xl border border-term-red bg-term-panel p-4 text-sm">
-            <span className="font-bold text-term-red">ERR </span>
-            <span className="text-gray-200">{error}</span>
+          <div
+            role="alert"
+            className="mx-auto flex max-w-2xl items-start gap-3 rounded-lg border border-danger/40 bg-danger/5 px-4 py-3 text-sm"
+          >
+            <TriangleAlert size={17} className="mt-0.5 shrink-0 text-danger" />
+            <div>
+              <div className="font-medium text-ink">Analysis failed for {activeTicker}</div>
+              <div className="mt-0.5 text-ink-2">{error}</div>
+            </div>
           </div>
         )}
 
-        {data && !loading && (
-          <div className="mt-10">
-            <div className="mb-4 flex flex-wrap items-baseline gap-x-6 gap-y-1 border-b border-term-border pb-3 text-xs">
-              <span className="text-lg font-bold text-term-amber">{data.ticker} US Equity</span>
-              {data.company_name && <span className="text-gray-200">{data.company_name}</span>}
-              {data.filing_date && (
-                <span className="text-term-muted">
-                  10-K FILED <span className="text-gray-200">{data.filing_date}</span>
-                </span>
-              )}
-              {data.extraction_method && (
-                <span className="text-term-muted">
-                  SOURCE{' '}
-                  <span className={data.extraction_method === 'item7' ? 'text-term-green' : 'text-term-amber'}>
-                    {data.extraction_method === 'item7' ? 'ITEM 7 MD&A' : 'FULL DOC (TRUNCATED)'}
-                  </span>
-                </span>
-              )}
-              {data.document_url && (
-                <a
-                  href={data.document_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-term-cyan underline-offset-2 hover:underline"
-                >
-                  VIEW FILING &rarr;
-                </a>
-              )}
-            </div>
+        {!loading && !error && !data && <EmptyState onPick={runAnalysis} />}
 
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-              {SECTIONS.map((s) => (
-                <SectionPanel key={s.key} section={s} items={Array.isArray(data[s.key]) ? data[s.key] : []} />
-              ))}
+        {data && !loading && (
+          <>
+            <CompanyHeader data={data} />
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
+              <div className="space-y-6">
+                {SECTIONS.map((s) => (
+                  <AnalysisSection
+                    key={s.key}
+                    title={s.title}
+                    icon={s.icon}
+                    insights={data.summary?.[s.key] ?? []}
+                  />
+                ))}
+              </div>
+              <aside className="space-y-6 lg:sticky lg:top-24 lg:self-start">
+                <RevenueMixChart data={data.charts?.revenue_segments ?? []} />
+                <CapitalDeploymentChart data={data.charts?.capital_deployment ?? []} />
+              </aside>
             </div>
-          </div>
+          </>
         )}
       </main>
 
-      <footer className="border-t border-term-border px-4 py-2 text-center text-[10px] tracking-wider text-term-muted">
-        DATA: SEC EDGAR // ANALYSIS: GEMINI 2.5 FLASH // NOT INVESTMENT ADVICE
+      <footer className="border-t border-line px-4 py-3 text-center text-[11px] text-muted">
+        Data: SEC EDGAR · Analysis: Gemini 2.5 Flash · Not investment advice
       </footer>
     </div>
   )
