@@ -84,3 +84,29 @@ def test_missing_gemini_key(fake_sec, monkeypatch):
     res = TestClient(main.app).get("/api/summarize", params={"ticker": "AAPL"})
     assert res.status_code == 500
     assert "GEMINI_API_KEY" in res.json()["detail"]
+
+
+def test_insights_carry_verified_flag(client):
+    summary = client.get("/api/summarize", params={"ticker": "AAPL"}).json()["summary"]
+    assert summary["revenue_drivers"][0]["verified"] is True
+    assert summary["capital_allocation"][0]["verified"] is False
+    assert summary["macro_risks"][0]["verified"] is False
+
+
+def test_prompt_requires_verbatim_evidence(client, fake_gemini):
+    client.get("/api/summarize", params={"ticker": "AAPL"})
+    prompt = fake_gemini.calls[0]["config"].system_instruction
+    assert "CITE EVIDENCE" in prompt
+    assert prompt.startswith("\nYou are an elite buy-side equity analyst.")
+
+
+def test_segment_check(client, fake_sec):
+    fake_sec.add_json(APPLE_FACTS_URL, apple_companyfacts())
+    check = client.get("/api/summarize", params={"ticker": "AAPL"}).json()["checks"]["segments"]
+    assert check["reported_revenue"] == pytest.approx(416.2e9)
+    assert check["segments_total"] == pytest.approx(318.8e9)
+    assert check["reconciles"] is False
+
+
+def test_segment_check_absent_without_xbrl(client):
+    assert client.get("/api/summarize", params={"ticker": "AAPL"}).json()["checks"]["segments"] is None

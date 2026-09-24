@@ -111,12 +111,16 @@ class FakeGemini:
 
 
 def default_analysis():
-    insight = {"headline": "Services Acceleration", "detail": "Services grew 14% to $109.2B."}
+    insight = {
+        "headline": "Services Acceleration",
+        "detail": "Services grew 14% to $109.2B.",
+        "evidence": "Services net sales grew 14% year over year to $109.2 billion.",
+    }
     return {
         "summary": {
             "revenue_drivers": [insight],
-            "capital_allocation": [{"headline": "Buybacks", "detail": "Repurchased $90.7B."}],
-            "macro_risks": [{"headline": "Tariffs", "detail": "Tariff costs of $1.1B."}],
+            "capital_allocation": [{"headline": "Buybacks", "detail": "Repurchased $90.7B.", "evidence": "The Company repurchased $90.7 billion of its common stock."}],
+            "macro_risks": [{"headline": "Tariffs", "detail": "Tariff costs of $1.1B.", "evidence": ""}],
         },
         "charts": {
             "revenue_segments": [{"name": "iPhone", "value": 209.6}, {"name": "Services", "value": 109.2}],

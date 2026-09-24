@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import analysis
 import financials
 import sec
+import verify
 
 app = FastAPI(title="item7-extractor")
 
@@ -78,6 +79,12 @@ def run_pipeline(query: str) -> dict:
         deployment = [{"name": p.name, "value": p.value * 1e9} for p in result.charts.capital_deployment]
         deployment_source = "gemini"
 
+    normalized_source = verify.normalize(mdna_text)
+    summary = {
+        key: verify.annotate([i.model_dump() for i in insights], normalized_source)
+        for key, insights in result.summary
+    }
+
     return {
         "ticker": ticker,
         "company_name": company_name,
@@ -90,11 +97,14 @@ def run_pipeline(query: str) -> dict:
             "document_url": document_url,
             "mdna_source": mdna_source,
         },
-        "summary": result.summary.model_dump(),
+        "summary": summary,
         "charts": {
             "revenue_segments": segments,
             "capital_deployment": deployment,
             "capital_deployment_source": deployment_source,
+        },
+        "checks": {
+            "segments": verify.segment_check(segments, fin and fin["kpis"]["revenue"]),
         },
         "financials": fin,
         "warnings": warnings,

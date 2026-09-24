@@ -175,7 +175,7 @@ export default function App() {
                 ))}
               </div>
               <aside className="space-y-6 lg:sticky lg:top-24 lg:self-start">
-                <RevenueMixChart data={data.charts?.revenue_segments ?? []} />
+                <RevenueMixChart data={data.charts?.revenue_segments ?? []} check={data.checks?.segments} />
                 <CapitalDeploymentChart
                   data={data.charts?.capital_deployment ?? []}
                   source={data.charts?.capital_deployment_source}

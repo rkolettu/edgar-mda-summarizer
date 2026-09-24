@@ -1,7 +1,8 @@
-import { ChartPie } from 'lucide-react'
+import { ChartPie, CircleAlert, CircleCheck } from 'lucide-react'
 import { useState } from 'react'
 import { Cell, Pie, PieChart, ResponsiveContainer } from 'recharts'
-import { formatShare, formatUsd } from '../lib/format'
+import { STATUS } from '../lib/colors'
+import { formatShare, formatSignedPct, formatUsd } from '../lib/format'
 import { ChartCard, EmptyChart } from './ChartCard'
 
 // Order validated for CVD + normal-vision separation on the panel surface, including the donut's wrap-around pair.
@@ -19,14 +20,29 @@ function toSegments(raw) {
   return [...head, { name: 'Other', value: otherValue, color: OTHER_COLOR }]
 }
 
-export default function RevenueMixChart({ data }) {
+function ReconciliationNote({ check }) {
+  if (!check) return 'Segments extracted from the MD&A by Gemini; no XBRL revenue to reconcile against.'
+  const Icon = check.reconciles ? CircleCheck : CircleAlert
+  return (
+    <span className="flex items-start gap-1.5">
+      <Icon size={13} className="mt-px shrink-0" style={{ color: check.reconciles ? STATUS.good : STATUS.warning }} aria-hidden />
+      <span>
+        {check.reconciles
+          ? `Segments reconcile to reported revenue of ${formatUsd(check.reported_revenue)} (${formatSignedPct(check.difference)}).`
+          : `Segments sum to ${formatUsd(check.segments_total)} vs. reported revenue of ${formatUsd(check.reported_revenue)} (${formatSignedPct(check.difference)}). The breakdown may omit segments or mix product and geographic views.`}
+      </span>
+    </span>
+  )
+}
+
+export default function RevenueMixChart({ data, check }) {
   const [active, setActive] = useState(null)
   const segments = toSegments(data)
   const total = segments.reduce((sum, d) => sum + d.value, 0)
   const focus = active === null ? null : segments[active]
 
   return (
-    <ChartCard title="Revenue Mix" subtitle="USD" icon={ChartPie}>
+    <ChartCard title="Revenue Mix" subtitle="USD" icon={ChartPie} footer={<ReconciliationNote check={check} />}>
       {segments.length === 0 ? (
         <EmptyChart message="No segment revenue disclosed" />
       ) : (

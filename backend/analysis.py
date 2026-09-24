@@ -19,6 +19,7 @@ CRITICAL RULES:
 2. ABBREVIATE NUMBERS: Convert large numbers to billions/millions (e.g., "$109.1B").
 3. SYNTHESIZE: Group related metrics together so the analysis reads like a professional investment memo.
 4. EXTRACT CHART DATA: Pull the quantitative revenue segment mix and capital allocation mix into the data arrays.
+5. CITE EVIDENCE: Every insight must include an "evidence" field: one sentence copied VERBATIM from the filing text that supports the insight. Do not paraphrase, merge sentences, or change any number; the quote is checked against the filing.
 
 Output EXACTLY this JSON format:
 {
@@ -26,19 +27,22 @@ Output EXACTLY this JSON format:
     "revenue_drivers": [
       {
         "headline": "Strong Services Acceleration",
-        "detail": "Services revenue grew 14% to $109.1B, driven by high-margin App Store and cloud growth. This offset hardware softness and expanded overall gross margins."
+        "detail": "Services revenue grew 14% to $109.1B, driven by high-margin App Store and cloud growth. This offset hardware softness and expanded overall gross margins.",
+        "evidence": "Services net sales increased during 2025 compared to 2024 due primarily to higher net sales from advertising, the App Store and cloud services."
       }
     ],
     "capital_allocation": [
       {
         "headline": "Aggressive Share Repurchases",
-        "detail": "Management retired $89.3B in stock under the new $100B authorization. Additionally, R&D spend increased 10% to $34.5B to support infrastructure buildouts."
+        "detail": "Management retired $89.3B in stock under the new $100B authorization. Additionally, R&D spend increased 10% to $34.5B to support infrastructure buildouts.",
+        "evidence": "..."
       }
     ],
     "macro_risks": [
       {
         "headline": "Q2 Tariff Headwinds & FX Drag",
-        "detail": "..."
+        "detail": "...",
+        "evidence": "..."
       }
     ]
   },
@@ -53,6 +57,7 @@ Output EXACTLY this JSON format:
 class Insight(BaseModel):
     headline: str
     detail: str
+    evidence: str
 
 
 class Summary(BaseModel):

@@ -16,5 +16,6 @@ export const CHART_CHROME = {
 // Status colors carry meaning (good / bad) and always ship with an icon and a sign, never color alone.
 export const STATUS = {
   good: '#0ca30c',
+  warning: '#fab219',
   critical: '#e66767',
 }
