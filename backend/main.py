@@ -61,10 +61,9 @@ def run_pipeline(query: str) -> dict:
     document_url = sec.archive_url(cik, filing["accession_number"], filing["primary_doc"])
 
     text = sec.html_to_text(sec.sec_get(document_url).text)
-    item7 = sec.extract_item7(text)
-    mdna_source = "item7" if item7 else "fallback"
-    mdna_text = item7 if item7 else text[: sec.FALLBACK_CHARS]
-    if not item7:
+    mdna = sec.extract_mdna(cik, filing, text, document_url)
+    mdna_text = mdna["text"]
+    if mdna["source"] == "fallback":
         warnings.append("Item 7 could not be isolated; the analysis used the start of the filing instead.")
 
     company_name = submissions.get("name") or company["name"]
@@ -95,7 +94,8 @@ def run_pipeline(query: str) -> dict:
             "filing_date": filing["filing_date"],
             "report_date": filing["report_date"],
             "document_url": document_url,
-            "mdna_source": mdna_source,
+            "mdna_source": mdna["source"],
+            "mdna_url": mdna["url"],
         },
         "summary": summary,
         "charts": {

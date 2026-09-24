@@ -19,6 +19,7 @@ def test_summarize_happy_path(client, fake_sec, fake_gemini):
     assert body["filing"]["report_date"] == "2025-09-27"
     assert body["filing"]["document_url"] == APPLE_10K_URL
     assert body["filing"]["mdna_source"] == "item7"
+    assert body["filing"]["mdna_url"] == APPLE_10K_URL
     assert body["summary"]["revenue_drivers"][0]["headline"] == "Services Acceleration"
 
 

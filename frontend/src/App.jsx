@@ -14,6 +14,7 @@ const QUICK_TICKERS = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'JPM']
 
 const MDNA_SOURCE_LABELS = {
   item7: 'Item 7 MD&A',
+  exhibit13: 'Annual report MD&A (Exhibit 13)',
   fallback: 'Full filing (Item 7 not isolated)',
 }
 
@@ -56,6 +57,16 @@ function CompanyHeader({ data }) {
             className="flex items-center gap-1 text-accent hover:text-accent-hover"
           >
             View filing <ExternalLink size={12} />
+          </a>
+        )}
+        {filing.mdna_url && filing.mdna_url !== filing.document_url && (
+          <a
+            href={filing.mdna_url}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1 text-accent hover:text-accent-hover"
+          >
+            View MD&amp;A exhibit <ExternalLink size={12} />
           </a>
         )}
       </dl>
