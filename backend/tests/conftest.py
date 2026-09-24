@@ -32,14 +32,24 @@ MDNA_BODY = (
 ) * 60
 
 
-def ten_k_html(mdna_body: str = MDNA_BODY) -> str:
+RISK_BODY = (
+    "The Company's operations are subject to tariffs imposed on imports from China and India. "
+    "Changes in foreign exchange rates could adversely affect net sales and gross margins. "
+) * 40
+
+
+def ten_k_html(mdna_body: str = MDNA_BODY, risk_body: str = RISK_BODY) -> str:
     return f"""<html><head><style>.x{{}}</style></head><body>
     <table>
       <tr><td>Item&nbsp;1A.</td><td>Risk Factors</td><td>5</td></tr>
       <tr><td>Item 7.</td><td>Management&#8217;s Discussion and Analysis of Financial Condition</td><td>20</td></tr>
       <tr><td>Item 8.</td><td>Financial Statements</td><td>30</td></tr>
     </table>
-    <p>PART I</p><p>Item 1. Business</p><p>The Company designs smartphones.</p>
+    <p>PART I</p><p>Item 1. Business</p><p>The Company designs smartphones. See Item 1A. Risk Factors for more.</p>
+    <p><b>Item 1A. Risk Factors</b></p><p>{risk_body}</p>
+    <p>Item 1B. Unresolved Staff Comments</p><p>None.</p>
+    <p>Item 1C. Cybersecurity</p><p>The Company maintains a cybersecurity program.</p>
+    <p>Item 2. Properties</p><p>Cupertino.</p>
     <p>PART II</p>
     <p><b>Item 7. Management’s Discussion and Analysis</b> of Financial Condition and Results of Operations</p>
     <p>{mdna_body}</p>

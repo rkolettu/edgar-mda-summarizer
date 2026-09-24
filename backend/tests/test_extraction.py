@@ -102,3 +102,39 @@ def test_no_exhibit_falls_back_to_filing_start(fake_sec):
 def test_missing_index_page_falls_back(fake_sec):
     mdna = sec.extract_mdna(BANK_CIK, FILING, bank_10k_text(), "https://doc")
     assert mdna["source"] == "fallback"
+
+
+def test_extracts_item_1a_risk_factors():
+    from tests.conftest import ten_k_html
+
+    risks = sec.extract_risk_factors(text_of(ten_k_html()))
+    assert risks.startswith("Item 1A. Risk Factors The Company's operations are subject to tariffs")
+    assert "Unresolved Staff Comments" not in risks
+
+
+def test_risk_factors_capped():
+    from tests.conftest import ten_k_html
+
+    risks = sec.extract_risk_factors(text_of(ten_k_html(risk_body="Risk sentence about demand. " * 5000)))
+    assert len(risks) == sec.RISK_FACTORS_CHARS
+
+
+def test_smaller_reporting_company_without_risk_factors():
+    text = text_of("<p>Item 1A. Risk Factors</p><p>Not applicable.</p><p>Item 1B. Unresolved Staff Comments</p>")
+    assert sec.extract_risk_factors(text) is None
+
+
+def test_heading_followed_by_intro_cross_reference_is_not_toc():
+    text = text_of(
+        "<p>Item 7. Management's Discussion and Analysis</p>"
+        "<p>Read this with Item 8. Financial Statements and Supplementary Data.</p>"
+        f"<p>{MDNA_BODY}</p><p>Item 8. Financial Statements</p>"
+    )
+    section = sec.extract_item7(text)
+    assert section is not None and "Net sales increased" in section
+
+
+def test_toc_entry_detection():
+    toc = text_of("<p>Item 1A. Risk Factors 12 Item 1B. Unresolved Staff Comments 25</p>")
+    start = sec.ITEM1A_START.search(toc)
+    assert sec.is_toc_entry(toc, start.end())

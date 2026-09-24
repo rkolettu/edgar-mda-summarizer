@@ -17,11 +17,16 @@ FILING_INDEX_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession_no_
 REQUEST_TIMEOUT = 30
 
 FALLBACK_CHARS = 100_000
+RISK_FACTORS_CHARS = 80_000
 MIN_SECTION_CHARS = 2_000
 
 SEP = r"\s*[.:\-–—]?\s*"
 ITEM7_START = re.compile(rf"item\s*7{SEP}management'?s\s+discussion\s+and\s+analysis", re.IGNORECASE)
 ITEM7_END = re.compile(r"item\s*8\s*(?:[.:\-–—]|\s+financial\s+statements)", re.IGNORECASE)
+ITEM1A_START = re.compile(rf"item\s*1a{SEP}risk\s+factors", re.IGNORECASE)
+ITEM1A_END = re.compile(
+    rf"item\s*1b{SEP}unresolved\s+staff|item\s*1c{SEP}cybersecurity|item\s*2{SEP}properties", re.IGNORECASE
+)
 ANNUAL_REPORT_MDNA_START = re.compile(
     r"management'?s\s+discussion\s+and\s+analysis\s+of\s+(?:the\s+)?(?:consolidated\s+)?(?:financial\s+condition|results)",
     re.IGNORECASE,
@@ -33,7 +38,7 @@ ANNUAL_REPORT_MDNA_END = re.compile(
 # A heading reference inside prose ("see Item 8. Financial Statements", "discussed in Part II, Item 7. ...")
 # is not a section boundary.
 CROSS_REFERENCE = re.compile(
-    r"(?:\bsee|\bin|\bunder|\brefer\s+to|\bdescribed|\bdiscussed|\bincluded|\bset\s+forth|\bwithin|\bof|\band|\bthis|\bour)"
+    r"(?:\bsee|\bin|\bunder|\brefer\s+to|\bdescribed|\bdiscussed|\bincluded|\bset\s+forth|\bwithin|\bwith|\bto|\bfrom|\bof|\band|\bthis|\bour)"
     r"[\s,]*(?:part\s+[iv]+[\s,.]*)?[\"“(']?\s*$",
     re.IGNORECASE,
 )
@@ -157,15 +162,28 @@ def html_to_text(html: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+ANY_ITEM_HEADING = re.compile(r"\bitem\s*\d{1,2}[a-c]?\s*[.:\-–—]?\s", re.IGNORECASE)
+TOC_WINDOW = 150
+
+
 def is_cross_reference(text: str, index: int) -> bool:
     return bool(CROSS_REFERENCE.search(text[max(0, index - 40):index]))
+
+
+def is_toc_entry(text: str, end_of_heading: int) -> bool:
+    # In a table of contents the next item heading follows within a few words (after a page number);
+    # an intro sentence like "read with ... Part II, Item 8" is a cross-reference, not a TOC line.
+    return any(
+        not is_cross_reference(text, m.start())
+        for m in ANY_ITEM_HEADING.finditer(text, end_of_heading, end_of_heading + TOC_WINDOW)
+    )
 
 
 def extract_section(text: str, start_re: re.Pattern, end_re: re.Pattern, min_chars: int = MIN_SECTION_CHARS) -> str | None:
     # The table of contents also matches, so take the longest heading-to-heading span.
     best = ""
     for start in start_re.finditer(text):
-        if is_cross_reference(text, start.start()):
+        if is_cross_reference(text, start.start()) or is_toc_entry(text, start.end()):
             continue
         end = next((m for m in end_re.finditer(text, start.end()) if not is_cross_reference(text, m.start())), None)
         if not end:
@@ -178,6 +196,11 @@ def extract_section(text: str, start_re: re.Pattern, end_re: re.Pattern, min_cha
 
 def extract_item7(text: str) -> str | None:
     return extract_section(text, ITEM7_START, ITEM7_END)
+
+
+def extract_risk_factors(text: str) -> str | None:
+    section = extract_section(text, ITEM1A_START, ITEM1A_END)
+    return section[:RISK_FACTORS_CHARS] if section else None
 
 
 def find_exhibit(cik: int, accession_number: str, exhibit_type: str) -> str | None:

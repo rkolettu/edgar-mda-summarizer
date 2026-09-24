@@ -111,3 +111,16 @@ def test_segment_check(client, fake_sec):
 
 def test_segment_check_absent_without_xbrl(client):
     assert client.get("/api/summarize", params={"ticker": "AAPL"}).json()["checks"]["segments"] is None
+
+
+def test_risk_factors_sent_to_gemini_and_used_for_verification(client, fake_gemini):
+    fake_gemini.responses["Analysis"]["summary"]["macro_risks"][0]["evidence"] = (
+        "Changes in foreign exchange rates could adversely affect net sales and gross margins."
+    )
+    body = client.get("/api/summarize", params={"ticker": "AAPL"}).json()
+    contents = fake_gemini.calls[0]["contents"]
+    risks = contents.split("--- BEGIN 10-K ITEM 1A RISK FACTORS ---")[1]
+    assert risks.strip().startswith("Item 1A. Risk Factors")
+    assert "MACRO RISKS" in fake_gemini.calls[0]["config"].system_instruction
+    assert body["filing"]["risk_factors_found"] is True
+    assert body["summary"]["macro_risks"][0]["verified"] is True

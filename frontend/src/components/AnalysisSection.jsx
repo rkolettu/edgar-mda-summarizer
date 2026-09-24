@@ -24,12 +24,13 @@ export function Evidence({ quote, verified }) {
   )
 }
 
-export default function AnalysisSection({ title, icon: Icon, insights }) {
+export default function AnalysisSection({ title, icon: Icon, insights, sourceNote }) {
   return (
     <section className="rounded-lg border border-line bg-panel">
       <header className="flex items-center gap-2.5 border-b border-line px-5 py-3.5">
         <Icon size={17} className="text-accent" />
         <h2 className="text-sm font-semibold tracking-wide text-ink uppercase">{title}</h2>
+        {sourceNote && <span className="hidden text-xs text-muted sm:inline">· {sourceNote}</span>}
         <span className="ml-auto font-mono text-xs text-muted">
           {insights.length} {insights.length === 1 ? 'insight' : 'insights'}
         </span>

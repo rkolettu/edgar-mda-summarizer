@@ -63,11 +63,12 @@ def run_pipeline(query: str) -> dict:
     text = sec.html_to_text(sec.sec_get(document_url).text)
     mdna = sec.extract_mdna(cik, filing, text, document_url)
     mdna_text = mdna["text"]
+    risk_factors = sec.extract_risk_factors(text)
     if mdna["source"] == "fallback":
         warnings.append("Item 7 could not be isolated; the analysis used the start of the filing instead.")
 
     company_name = submissions.get("name") or company["name"]
-    result = analysis.summarize(company_name, ticker, mdna_text)
+    result = analysis.summarize(company_name, ticker, mdna_text, risk_factors)
     fin = load_financials(cik, filing["report_date"], warnings)
 
     # Gemini reports chart values in billions; the API returns raw USD everywhere.
@@ -78,7 +79,7 @@ def run_pipeline(query: str) -> dict:
         deployment = [{"name": p.name, "value": p.value * 1e9} for p in result.charts.capital_deployment]
         deployment_source = "gemini"
 
-    normalized_source = verify.normalize(mdna_text)
+    normalized_source = verify.normalize(f"{mdna_text}\n{risk_factors or ''}")
     summary = {
         key: verify.annotate([i.model_dump() for i in insights], normalized_source)
         for key, insights in result.summary
@@ -96,6 +97,7 @@ def run_pipeline(query: str) -> dict:
             "document_url": document_url,
             "mdna_source": mdna["source"],
             "mdna_url": mdna["url"],
+            "risk_factors_found": risk_factors is not None,
         },
         "summary": summary,
         "charts": {

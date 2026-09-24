@@ -20,6 +20,7 @@ CRITICAL RULES:
 3. SYNTHESIZE: Group related metrics together so the analysis reads like a professional investment memo.
 4. EXTRACT CHART DATA: Pull the quantitative revenue segment mix and capital allocation mix into the data arrays.
 5. CITE EVIDENCE: Every insight must include an "evidence" field: one sentence copied VERBATIM from the filing text that supports the insight. Do not paraphrase, merge sentences, or change any number; the quote is checked against the filing.
+6. MACRO RISKS: When an Item 1A Risk Factors section is provided, draw macro_risks from both it and the MD&A. Prioritize risks management quantifies or describes as new or heightened, and skip generic boilerplate.
 
 Output EXACTLY this JSON format:
 {
@@ -112,9 +113,11 @@ def generate(system_prompt: str, contents: str, schema: type[BaseModel]) -> Base
         raise HTTPException(status_code=502, detail=f"Gemini returned malformed JSON: {exc}") from exc
 
 
-def summarize(company_name: str, ticker: str, mdna_text: str) -> Analysis:
+def summarize(company_name: str, ticker: str, mdna_text: str, risk_factors: str | None) -> Analysis:
     contents = (
         f"Company: {company_name} ({ticker})\n\n"
         f"--- BEGIN 10-K MD&A ---\n{mdna_text}\n--- END 10-K MD&A ---"
     )
+    if risk_factors:
+        contents += f"\n\n--- BEGIN 10-K ITEM 1A RISK FACTORS ---\n{risk_factors}\n--- END 10-K ITEM 1A RISK FACTORS ---"
     return generate(SYSTEM_PROMPT, contents, Analysis)

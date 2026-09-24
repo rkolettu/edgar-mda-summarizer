@@ -182,6 +182,7 @@ export default function App() {
                     title={s.title}
                     icon={s.icon}
                     insights={data.summary?.[s.key] ?? []}
+                    sourceNote={s.key === 'macro_risks' && data.filing.risk_factors_found ? 'MD&A + Item 1A Risk Factors' : null}
                   />
                 ))}
               </div>
