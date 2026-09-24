@@ -5,8 +5,8 @@ import CapitalDeploymentChart from './components/CapitalDeploymentChart'
 import LoadingState from './components/LoadingState'
 import RevenueMixChart from './components/RevenueMixChart'
 import SearchHeader from './components/SearchHeader'
+import { getJson } from './lib/api'
 
-const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '')
 const QUICK_TICKERS = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'JPM']
 
 const SECTIONS = [
@@ -64,7 +64,7 @@ function EmptyState({ onPick }) {
     <div className="mx-auto max-w-xl py-20 text-center">
       <h1 className="text-2xl font-semibold tracking-tight text-ink">Institutional-grade 10-K MD&amp;A analysis</h1>
       <p className="mt-3 text-sm leading-relaxed text-ink-2">
-        Enter a ticker to pull the latest 10-K from SEC EDGAR, isolate Item 7, and generate a buy-side memo on
+        Search by company name or ticker to pull the latest 10-K from SEC EDGAR, isolate Item 7, and generate a buy-side memo on
         revenue drivers, capital allocation, and macro risk.
       </p>
       <div className="mt-6 flex flex-wrap justify-center gap-2">
@@ -83,27 +83,26 @@ function EmptyState({ onPick }) {
 }
 
 export default function App() {
-  const [ticker, setTicker] = useState('')
-  const [activeTicker, setActiveTicker] = useState('')
+  const [query, setQuery] = useState('')
+  const [activeQuery, setActiveQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [data, setData] = useState(null)
 
-  async function runAnalysis(symbol) {
-    const t = symbol.trim().toUpperCase()
-    if (!t || loading) return
+  async function runAnalysis(input) {
+    const q = input.trim()
+    if (!q || loading) return
 
-    setTicker(t)
-    setActiveTicker(t)
+    setQuery(q)
+    setActiveQuery(q)
     setLoading(true)
     setError('')
     setData(null)
 
     try {
-      const res = await fetch(`${API_BASE}/api/summarize?ticker=${encodeURIComponent(t)}`)
-      const body = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(body.detail || `Request failed (${res.status})`)
+      const body = await getJson('/api/summarize', { ticker: q })
       setData(body)
+      setQuery(body.ticker)
     } catch (err) {
       setError(err.message || 'Unexpected error')
     } finally {
@@ -111,17 +110,12 @@ export default function App() {
     }
   }
 
-  function handleSubmit(e) {
-    e.preventDefault()
-    runAnalysis(ticker)
-  }
-
   return (
     <div className="flex min-h-screen flex-col bg-page">
-      <SearchHeader ticker={ticker} onTickerChange={setTicker} onSubmit={handleSubmit} loading={loading} />
+      <SearchHeader query={query} onQueryChange={setQuery} onSubmit={runAnalysis} loading={loading} />
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6">
-        {loading && <LoadingState ticker={activeTicker} />}
+        {loading && <LoadingState ticker={activeQuery} />}
 
         {error && !loading && (
           <div
@@ -130,7 +124,7 @@ export default function App() {
           >
             <TriangleAlert size={17} className="mt-0.5 shrink-0 text-danger" />
             <div>
-              <div className="font-medium text-ink">Analysis failed for {activeTicker}</div>
+              <div className="font-medium text-ink">Analysis failed for “{activeQuery}”</div>
               <div className="mt-0.5 text-ink-2">{error}</div>
             </div>
           </div>
