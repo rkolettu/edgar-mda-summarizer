@@ -1,6 +1,7 @@
 import { ExternalLink } from 'lucide-react'
 import { formatEps, formatUsd } from '../lib/format'
-import { Evidence } from './AnalysisSection'
+import { dimIfUnverified, useVerifiedItems } from '../lib/verification'
+import { Evidence, FigureText, UnverifiedToggle } from './Verification'
 import { Delta, Tile } from './KpiStrip'
 
 function quarterLabel(metrics, reportDate) {
@@ -10,6 +11,7 @@ function quarterLabel(metrics, reportDate) {
 
 export default function LatestQuarter({ quarter }) {
   const { filing, metrics, highlights } = quarter
+  const { visible, unverifiedCount, showUnverified, toggle } = useVerifiedItems(highlights)
   const tiles = metrics
     ? [
         { key: 'revenue', label: 'Revenue', value: formatUsd(metrics.revenue), growth: metrics.revenue_growth },
@@ -48,15 +50,27 @@ export default function LatestQuarter({ quarter }) {
           <p className="text-sm text-muted">No quarterly XBRL figures reported for this period.</p>
         )}
 
-        <ol className="space-y-4">
-          {highlights.map((h, i) => (
-            <li key={i}>
-              <h3 className="text-[15px] leading-snug font-semibold text-ink">{h.headline}</h3>
-              <p className="mt-1.5 text-sm leading-relaxed text-ink-2">{h.detail}</p>
-              <Evidence quote={h.evidence} verified={h.verified} where="10-Q" />
-            </li>
-          ))}
-        </ol>
+        <div>
+          {visible.length === 0 && (
+            <p className="text-sm text-muted">
+              {unverifiedCount ? 'No highlights could be verified against the 10-Q.' : 'No highlights returned.'}
+            </p>
+          )}
+          <ol className="space-y-4">
+            {visible.map((h, i) => (
+              <li key={i} className={dimIfUnverified(h)}>
+                <h3 className="text-[15px] leading-snug font-semibold text-ink">
+                  <FigureText text={h.headline} spans={h.figures?.headline} />
+                </h3>
+                <p className="mt-1.5 text-sm leading-relaxed text-ink-2">
+                  <FigureText text={h.detail} spans={h.figures?.detail} />
+                </p>
+                <Evidence item={h} where="10-Q" />
+              </li>
+            ))}
+          </ol>
+          <UnverifiedToggle count={unverifiedCount} shown={showUnverified} onToggle={toggle} className="mt-2" />
+        </div>
       </div>
     </section>
   )
