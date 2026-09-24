@@ -12,7 +12,7 @@ from pydantic import BaseModel, ValidationError
 GEMINI_MODEL = "gemini-2.5-flash"
 
 SYSTEM_PROMPT = """
-You are an elite buy-side equity analyst. Analyze the 10-K MD&A section and output a strict JSON response.
+You are an elite buy-side equity analyst. Analyze the annual filing's management discussion and output a strict JSON response.
 
 CRITICAL RULES:
 1. Provide up to 4 substantive insights per category, each with a headline and a 2-3 sentence detail. Include numbers, margin impacts, year-over-year changes and management outlook only when supported by the supplied filing text. Return fewer insights or an empty array when evidence is insufficient.
@@ -20,7 +20,7 @@ CRITICAL RULES:
 3. SYNTHESIZE: Group related metrics together so the analysis reads like a professional investment memo.
 4. CHART DATA: Use only explicitly disclosed amounts from the same fiscal year. Chart values MUST be in USD billions (e.g. $750 million = 0.75). Revenue segments must be mutually exclusive; never combine segment and product views or include a total as a segment. Capital deployment must use distinct actual cash outlays, not authorizations, forecasts, or operating expenses such as R&D. Return empty arrays when comparable data or units are unavailable. Never invent values.
 5. CITE EVIDENCE: Every insight must include an "evidence" field: one sentence copied VERBATIM from the filing text that supports the insight. Do not paraphrase, merge sentences, or change any number; the quote is checked against the filing.
-6. MACRO RISKS: When an Item 1A Risk Factors section is provided, draw macro_risks from both it and the MD&A. Prioritize risks management quantifies or describes as new or heightened, and skip generic boilerplate.
+6. MACRO RISKS: When a Risk Factors section is provided, draw macro_risks from both it and the management discussion. Prioritize risks management quantifies or describes as new or heightened, and skip generic boilerplate.
 7. REFERENCE FIGURES: When a REFERENCE FIGURES block is provided, it is authoritative; whenever you cite one of those metrics, use exactly the value shown there. Every dollar amount and percentage you write must appear in the supplied filing text or in REFERENCE FIGURES. Do not calculate new totals, ratios, or growth rates. Figures are checked automatically, and untraceable ones are flagged to the reader.
 
 Output EXACTLY this JSON format:
@@ -150,18 +150,24 @@ def with_reference(contents: str, reference: str | None) -> str:
     return f"{contents}\n\n{reference}" if reference else contents
 
 
-def summarize(company_name: str, ticker: str, mdna_text: str, risk_factors: str | None, reference: str | None = None) -> Analysis:
+def summarize(company_name: str, ticker: str, mdna_text: str, risk_factors: str | None, reference: str | None = None, form: str = "10-K", currency: str | None = None) -> Analysis:
+    label = "MD&A" if form == "10-K" else "MANAGEMENT DISCUSSION"
+    risks_label = "ITEM 1A RISK FACTORS" if form == "10-K" else "RISK FACTORS"
     contents = (
         f"Company: {company_name} ({ticker})\n\n"
-        f"--- BEGIN 10-K MD&A ---\n{mdna_text}\n--- END 10-K MD&A ---"
+        f"--- BEGIN {form} {label} ---\n{mdna_text}\n--- END {form} {label} ---"
     )
     if risk_factors:
-        contents += f"\n\n--- BEGIN 10-K ITEM 1A RISK FACTORS ---\n{risk_factors}\n--- END 10-K ITEM 1A RISK FACTORS ---"
+        contents += f"\n\n--- BEGIN {form} {risks_label} ---\n{risk_factors}\n--- END {form} {risks_label} ---"
+    if currency == "CAD":
+        contents += "\n\nThe management discussion reports Canadian dollars. Label monetary amounts CAD in the insights; return empty chart arrays because the chart schema requires USD."
+    elif currency == "unknown":
+        contents += "\n\nThe filing's reporting currency could not be verified. Keep monetary units explicit in insights and return empty chart arrays."
     return generate(SYSTEM_PROMPT, with_reference(contents, reference), Analysis)
 
 
 COMPARE_PROMPT = """
-You are an elite buy-side equity analyst comparing a company's latest 10-K with the prior year's 10-K. Output a strict JSON response.
+You are an elite buy-side equity analyst comparing a company's latest annual filing with the prior year's annual filing. Output a strict JSON response.
 
 CRITICAL RULES:
 1. FOCUS ON WHAT MOVED: Identify up to 6 investment-relevant changes between the two filings' MD&A and Risk Factors: new or removed risks, shifts in guidance or tone, new strategic priorities, changed segment reporting, and meaningful swings in key metrics. Ignore routine date or number rollovers. Return fewer if the supplied text does not support them.
@@ -200,9 +206,11 @@ class Changes(BaseModel):
 
 
 def _filing_block(label: str, tenk: dict) -> str:
-    block = f"--- BEGIN {label} 10-K MD&A (fiscal year ended {tenk['report_date']}) ---\n{tenk['mdna']['text'][:COMPARE_MDNA_CHARS]}\n--- END {label} 10-K MD&A ---"
+    form = tenk["form"]
+    section = "MD&A" if form == "10-K" else "MANAGEMENT DISCUSSION"
+    block = f"--- BEGIN {label} {form} {section} (fiscal year ended {tenk['report_date']}) ---\n{tenk['mdna']['text'][:COMPARE_MDNA_CHARS]}\n--- END {label} {form} {section} ---"
     if tenk["risk_factors"]:
-        block += f"\n\n--- BEGIN {label} 10-K RISK FACTORS ---\n{tenk['risk_factors']}\n--- END {label} 10-K RISK FACTORS ---"
+        block += f"\n\n--- BEGIN {label} {form} RISK FACTORS ---\n{tenk['risk_factors']}\n--- END {label} {form} RISK FACTORS ---"
     return block
 
 

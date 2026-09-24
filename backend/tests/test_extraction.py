@@ -170,3 +170,60 @@ def test_toc_entry_detection():
     toc = text_of("<p>Item 1A. Risk Factors 12 Item 1B. Unresolved Staff Comments 25</p>")
     start = sec.ITEM1A_START.search(toc)
     assert sec.is_toc_entry(toc, start.end())
+
+
+def test_split_item_heading_as_in_manhattan_associates():
+    text = text_of(
+        "<p>Item 7 Management's Discussion and Analysis 29 Item 7A Quantitative 40 Item 8 Financial Statements 41</p>"
+        f"<p>It em 7. Management's Discussion and Analysis of Financial Condition and Results of Operations {MDNA_BODY}</p>"
+        "<p>It em 7A. Quantitative and Qualitative Disclosures About Market Risk</p>"
+        "<p>It em 8. Financial Statements and Supplementary Data</p>"
+    )
+    section = sec.extract_item7(text)
+    assert section.startswith("It em 7. Management's Discussion")
+    assert "Quantitative and Qualitative Disclosures" not in section
+
+
+def test_ubs_20f_embedded_annual_report(fake_sec):
+    filing = {"form": "20-F", "accession_number": "0001610520-26-000023", "primary_doc": "ubs.htm"}
+    url = sec.archive_url(1610520, filing["accession_number"], filing["primary_doc"])
+    fake_sec.add_text(url, (
+        "<p>Item 5. Operating and Financial Review and Prospects. Incorporated by reference to the annual report.</p>"
+        "<p>Item 6. Directors, Senior Management and Employees</p>"
+        "<p>Risk factors Certain risks, including those described below, may affect our business. " + "Risk detail. " * 100 + "</p>"
+        "<p>Annual Report 2025 | Financial and operating performance | Accounting and financial reporting 62 "
+        "Financial and operating performance Management report " + "Operating profit increased. " * 250 + "</p>"
+        "<p>Annual Report 2025 | Risk, capital, liquidity and funding, and balance sheet 86 Risk, capital</p>"
+    ))
+    result = sec.load_20f(1610520, filing)
+    assert result["mdna"]["source"] == "operating_review"
+    assert "Operating profit increased" in result["mdna"]["text"]
+    assert "Incorporated by reference" not in result["mdna"]["text"]
+    assert result["risk_factors"].startswith("Risk factors Certain risks")
+
+
+def test_40f_uses_only_referenced_mdna_exhibit(fake_sec):
+    filing = {"form": "40-F", "accession_number": BANK_ACCESSION, "primary_doc": "bank40f.htm"}
+    url = sec.archive_url(BANK_CIK, BANK_ACCESSION, filing["primary_doc"])
+    exhibit = sec.archive_url(BANK_CIK, BANK_ACCESSION, "mdna.htm")
+    fake_sec.add_text(url, "<p>Exhibit 99.2: Management's Discussion and Analysis is incorporated by reference.</p>")
+    fake_sec.add_text(INDEX_URL, index_html([
+        ("Annual financial statements", "/Archives/edgar/data/19617/000001961726000044/statements.htm", "EX-99.3"),
+        ("Management discussion", "/Archives/edgar/data/19617/000001961726000044/mdna.htm", "EX-99.2"),
+    ]))
+    fake_sec.add_text(exhibit, "<p>Management's Discussion and Analysis This Management's Discussion and Analysis (MD&A) presents Canadian dollars. " + MDNA_BODY + "</p>")
+    result = sec.load_40f(BANK_CIK, filing)
+    assert result["mdna"]["url"] == exhibit
+    assert result["mdna"]["source"] == "mdna_exhibit"
+    assert result["currency"] == "CAD"
+
+
+def test_40f_rejects_financial_statement_exhibit(fake_sec):
+    filing = {"form": "40-F", "accession_number": BANK_ACCESSION, "primary_doc": "bank40f.htm"}
+    url = sec.archive_url(BANK_CIK, BANK_ACCESSION, filing["primary_doc"])
+    exhibit = sec.archive_url(BANK_CIK, BANK_ACCESSION, "mdna.htm")
+    fake_sec.add_text(url, "<p>Management's Discussion and Analysis is in Exhibit 99.2.</p>")
+    fake_sec.add_text(INDEX_URL, index_html([("Statements", "/Archives/edgar/data/19617/000001961726000044/mdna.htm", "EX-99.2")]))
+    fake_sec.add_text(exhibit, "<p>Consolidated statements of income. " + MDNA_BODY + "</p>")
+    with pytest.raises(HTTPException, match="Could not verify"):
+        sec.load_40f(BANK_CIK, filing)

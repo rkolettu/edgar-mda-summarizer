@@ -42,6 +42,27 @@ def test_without_xbrl_falls_back_to_gemini_chart_data(client):
     assert any("XBRL" in w for w in body["warnings"])
 
 
+def test_20f_pipeline_uses_annual_form_and_omits_10q(client, fake_sec, fake_gemini, monkeypatch):
+    url = "https://data.sec.gov/submissions/CIK0000320193.json"
+    recent = fake_sec.routes[url][1]["filings"]["recent"]
+    for i, form in enumerate(recent["form"]):
+        if form == "10-K":
+            recent["form"][i] = "20-F"
+
+    def foreign_loader(cik, filing):
+        loaded = sec.load_10k(cik, filing)
+        loaded["mdna"]["source"] = "item5"
+        return loaded
+
+    monkeypatch.setattr(sec, "load_20f", foreign_loader)
+    body = client.get("/api/summarize", params={"ticker": "AAPL"}).json()
+    assert body["filing"]["form"] == "20-F"
+    assert body["changes"]["prior_filing"]["form"] == "20-F"
+    assert body["latest_quarter"] is None
+    assert body["financials"] is None
+    assert "BEGIN 20-F MANAGEMENT DISCUSSION" in fake_gemini.calls[0]["contents"]
+
+
 def test_every_sec_request_sends_user_agent(client, fake_sec):
     client.get("/api/summarize", params={"ticker": "AAPL"})
     assert fake_sec.calls

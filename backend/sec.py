@@ -18,13 +18,14 @@ REQUEST_TIMEOUT = 30
 
 RISK_FACTORS_CHARS = 80_000
 MIN_SECTION_CHARS = 2_000
+FOREIGN_MDNA_CHARS = 120_000
 
 SEP = r"\s*[.:\-–—]?\s*"
-ITEM7_START = re.compile(rf"item\s*7{SEP}management'?s\s+discussion\s+and\s+analysis", re.IGNORECASE)
-ITEM7_END = re.compile(r"item\s*8\s*(?:[.:\-–—]|\s+financial\s+statements)", re.IGNORECASE)
-ITEM1A_START = re.compile(rf"item\s*1a{SEP}risk\s+factors", re.IGNORECASE)
+ITEM7_START = re.compile(rf"it\s*em\s*7{SEP}management'?s\s+discussion\s+and\s+analysis", re.IGNORECASE)
+ITEM7_END = re.compile(r"it\s*em\s*(?:7a\s*[.:\-–—]?\s+quantitative|8\s*(?:[.:\-–—]|\s+financial\s+statements))", re.IGNORECASE)
+ITEM1A_START = re.compile(rf"it\s*em\s*1a{SEP}risk\s+factors", re.IGNORECASE)
 ITEM1A_END = re.compile(
-    rf"item\s*1b{SEP}unresolved\s+staff|item\s*1c{SEP}cybersecurity|item\s*2{SEP}properties", re.IGNORECASE
+    rf"it\s*em\s*1b{SEP}unresolved\s+staff|it\s*em\s*1c{SEP}cybersecurity|it\s*em\s*2{SEP}properties", re.IGNORECASE
 )
 TENQ_MDNA_START = re.compile(rf"item\s*2{SEP}management'?s\s+discussion\s+and\s+analysis", re.IGNORECASE)
 TENQ_MDNA_END = re.compile(rf"item\s*3{SEP}quantitative|item\s*4{SEP}controls\s+and\s+procedures", re.IGNORECASE)
@@ -176,7 +177,7 @@ def html_to_text(html: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-ANY_ITEM_HEADING = re.compile(r"\bitem\s*\d{1,2}[a-c]?\s*[.:\-–—]?\s", re.IGNORECASE)
+ANY_ITEM_HEADING = re.compile(r"\bit\s*em\s*\d{1,2}[a-c]?\s*[.:\-–—]?\s", re.IGNORECASE)
 TOC_WINDOW = 150
 
 
@@ -217,6 +218,84 @@ def extract_risk_factors(text: str) -> str | None:
     return section[:RISK_FACTORS_CHARS] if section else None
 
 
+# UBS incorporates Item 5 by reference to the full annual report embedded in its 20-F.
+# Both boundaries are specific annual-report chapter headers, avoiding the short Item 5 pointer.
+UBS_OPERATING_START = re.compile(
+    r"Annual Report\s+\d{4}\s*\|\s*Financial and operating performance\s*\|\s*Accounting and financial reporting\s+\d+\s+Financial and operating performance\s+Management report",
+    re.IGNORECASE,
+)
+UBS_OPERATING_END = re.compile(
+    r"Annual Report\s+\d{4}\s*\|\s*Risk,\s*capital,\s*liquidity and funding,\s*and balance sheet\s+\d+\s+Risk,",
+    re.IGNORECASE,
+)
+UBS_RISK_START = re.compile(r"Risk factors\s+Certain risks,\s+including those described below", re.IGNORECASE)
+TWENTYF_START = re.compile(r"item\s*5\s*[.\-–—]?\s*operating\s+and\s+financial\s+review\s+and\s+prospects", re.IGNORECASE)
+TWENTYF_END = re.compile(r"item\s*6\s*[.\-–—]?\s*directors,?\s+senior\s+management", re.IGNORECASE)
+FORTYF_MDNA_START = re.compile(
+    r"management'?s\s+discussion\s+and\s+analysis\s+(?:this\s+management'?s\s+discussion\s+and\s+analysis|management'?s\s+discussion\s+and\s+analysis\s*\(md&a\)|about\s+[a-z]+)",
+    re.IGNORECASE,
+)
+FORTYF_REFERENCE = re.compile(
+    r"(?:exhibit\s+(99[.\-]\d+|2)\s*:\s*management'?s\s+discussion\s+and\s+analysis|management'?s\s+discussion\s+and\s+analysis.{0,140}?(?:exhibit\s+(99[.\-]\d+|2)))",
+    re.IGNORECASE,
+)
+
+
+def load_20f(cik: int, filing: dict) -> dict:
+    document_url = archive_url(cik, filing["accession_number"], filing["primary_doc"])
+    text = html_to_text(sec_get(document_url).text)
+    operating = extract_section(text, UBS_OPERATING_START, UBS_OPERATING_END)
+    source = "operating_review"
+    if not operating:
+        operating = extract_section(text, TWENTYF_START, TWENTYF_END)
+        source = "item5"
+    if not operating:
+        raise HTTPException(status_code=422, detail="Could not isolate the operating and financial review in this 20-F.")
+    # An incorporated-by-reference Item 5 is not the underlying management discussion.
+    if len(operating) < 5_000 or "incorporated by reference" in operating[:1_500].lower() and len(operating) < 10_000:
+        raise HTTPException(status_code=422, detail="The 20-F refers to a separate annual report; its management discussion could not be isolated.")
+    risk_start = UBS_RISK_START.search(text)
+    operating_start = UBS_OPERATING_START.search(text)
+    risks = None
+    if risk_start:
+        risk_end = risk_start.start() + RISK_FACTORS_CHARS
+        if operating_start and operating_start.start() > risk_start.start():
+            risk_end = min(risk_end, operating_start.start())
+        risks = text[risk_start.start():risk_end]
+    return {**filing, "document_url": document_url,
+            "mdna": {"text": operating[:FOREIGN_MDNA_CHARS], "source": source, "url": document_url},
+            "risk_factors": risks}
+
+
+def load_40f(cik: int, filing: dict) -> dict:
+    document_url = archive_url(cik, filing["accession_number"], filing["primary_doc"])
+    text = html_to_text(sec_get(document_url).text)
+    reference = FORTYF_REFERENCE.search(text)
+    if not reference:
+        raise HTTPException(status_code=422, detail="Could not locate a management discussion exhibit in this 40-F.")
+    exhibit_type = "EX-" + (reference.group(1) or reference.group(2)).upper().replace("-", ".")
+    exhibit_url = find_exhibit(cik, filing["accession_number"], exhibit_type)
+    if not exhibit_url:
+        raise HTTPException(status_code=422, detail="The 40-F management discussion exhibit is unavailable.")
+    exhibit_text = html_to_text(sec_get(exhibit_url).text)
+    # The exhibit must itself identify as MD&A near the beginning; do not summarize financial statements.
+    start = FORTYF_MDNA_START.search(exhibit_text[:30_000])
+    if not start or len(exhibit_text) - start.start() < 5_000:
+        raise HTTPException(status_code=422, detail="Could not verify the management discussion in this 40-F exhibit.")
+    risks = None
+    risk_match = re.search(r"Risk Factors that May Affect Future Results\s+", exhibit_text[10_000:], re.IGNORECASE)
+    if risk_match:
+        pos = 10_000 + risk_match.start()
+        risks = exhibit_text[pos:pos + RISK_FACTORS_CHARS]
+    sample = exhibit_text[:FOREIGN_MDNA_CHARS]
+    currency = ("CAD" if re.search(r"Canadian dollars|\bCAD\b|C\$", sample, re.IGNORECASE)
+                else "USD" if re.search(r"U\.?S\.?\s+dollars|\bUSD\b|US\$", sample, re.IGNORECASE)
+                else "unknown")
+    return {**filing, "document_url": document_url, "currency": currency,
+            "mdna": {"text": exhibit_text[start.start():start.start() + FOREIGN_MDNA_CHARS], "source": "mdna_exhibit", "url": exhibit_url},
+            "risk_factors": risks}
+
+
 def find_exhibit(cik: int, accession_number: str, exhibit_type: str) -> str | None:
     index_url = FILING_INDEX_URL.format(
         cik=cik, accession_no_dashes=accession_number.replace("-", ""), accession=accession_number
@@ -227,7 +306,7 @@ def find_exhibit(cik: int, accession_number: str, exhibit_type: str) -> str | No
         return None
     for row in BeautifulSoup(html, "html.parser").select("table.tableFile tr"):
         cells = row.find_all("td")
-        if len(cells) < 4 or not cells[3].get_text(strip=True).upper().startswith(exhibit_type):
+        if len(cells) < 4 or not re.match(rf"{re.escape(exhibit_type)}(?:\.|$)", cells[3].get_text(strip=True).upper()):
             continue
         link = cells[2].find("a")
         href = link.get("href", "") if link else ""

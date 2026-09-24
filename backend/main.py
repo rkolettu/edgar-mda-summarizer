@@ -141,7 +141,7 @@ def figure_index(texts: list[str], fin: dict | None, quarter: dict | None = None
 
 def build_changes(company_name: str, ticker: str, current: dict, prior_future: Future | None, fin: dict | None) -> Section:
     if prior_future is None:
-        return Section(None, ["No prior-year 10-K found; the year-over-year comparison is unavailable."])
+        return Section(None, [f"No prior-year {current['form']} found; the year-over-year comparison is unavailable."])
     try:
         prior = prior_future.result()
         result = analysis.compare(company_name, ticker, current, prior, financials.reference_block(fin))
@@ -154,7 +154,7 @@ def build_changes(company_name: str, ticker: str, current: dict, prior_future: F
         verify.annotate_item(c.model_dump(), sources["prior" if c.change_type == "removed" else "current"], index)
         for c in result.changes
     ]
-    prior_filing = {k: prior[k] for k in ("filing_date", "report_date", "document_url")}
+    prior_filing = {k: prior[k] for k in ("form", "filing_date", "report_date", "document_url")}
     return Section({"prior_filing": prior_filing, "items": items})
 
 
@@ -191,13 +191,16 @@ def run_pipeline(query: str) -> tuple[dict, bool]:
     ticker, cik = company["ticker"], company["cik"]
 
     submissions = sec.get_submissions(cik)
-    tenks = sec.find_filings(submissions, "10-K", limit=2)
-    if not tenks:
-        raise HTTPException(status_code=404, detail="No 10-K filing found in the company's recent submissions.")
-    prior_filing = tenks[1] if len(tenks) > 1 else None
-    tenq_filing = find_newer_10q(submissions, tenks[0])
+    forms = {"10-K": sec.load_10k, "20-F": sec.load_20f, "40-F": sec.load_40f}
+    annual_groups = [filings for form in forms if (filings := sec.find_filings(submissions, form, limit=2))]
+    annual = max(annual_groups, key=lambda filings: filings[0]["filing_date"], default=None)
+    if not annual:
+        raise HTTPException(status_code=404, detail="No 10-K, 20-F, or 40-F found in the company's recent submissions.")
+    current_filing = annual[0]
+    prior_filing = annual[1] if len(annual) > 1 else None
+    tenq_filing = find_newer_10q(submissions, current_filing) if current_filing["form"] == "10-K" else None
 
-    cache_key = (cik, *(f["accession_number"] if f else None for f in (tenks[0], prior_filing, tenq_filing)))
+    cache_key = (cik, *(f["accession_number"] if f else None for f in (current_filing, prior_filing, tenq_filing)))
     cached = RESULT_CACHE.get(cache_key)
     if cached is not None:
         return cached, False
@@ -205,18 +208,19 @@ def run_pipeline(query: str) -> tuple[dict, bool]:
     company_name = submissions.get("name") or company["name"]
     pool = ThreadPoolExecutor(max_workers=8)
     try:
-        current_future = pool.submit(sec.load_10k, cik, tenks[0])
-        prior_future = pool.submit(sec.load_10k, cik, prior_filing) if prior_filing else None
+        loader = forms[current_filing["form"]]
+        current_future = pool.submit(loader, cik, current_filing)
+        prior_future = pool.submit(loader, cik, prior_filing) if prior_filing else None
         tenq_future = pool.submit(sec.load_10q, cik, tenq_filing) if tenq_filing else None
-        facts_future = pool.submit(load_companyfacts, cik)
+        facts_future = pool.submit(load_companyfacts, cik) if current_filing["form"] == "10-K" else pool.submit(lambda: ({}, False))
 
         current = current_future.result()
         # Financials come first so every Gemini call can be given the authoritative figures.
-        fin_section = build_financials(facts_future, current["report_date"])
+        fin_section = build_financials(facts_future, current["report_date"]) if current["form"] == "10-K" else Section()
         fin = fin_section.value
         summary_future = pool.submit(
             analysis.summarize, company_name, ticker, current["mdna"]["text"], current["risk_factors"],
-            financials.reference_block(fin),
+            financials.reference_block(fin), current["form"], current.get("currency"),
         )
         changes_future = pool.submit(build_changes, company_name, ticker, current, prior_future, fin)
         quarter_future = pool.submit(
@@ -233,6 +237,12 @@ def run_pipeline(query: str) -> tuple[dict, bool]:
     warnings: list[str] = []
     for section in (fin_section, changes, quarter):
         warnings.extend(section.warnings)
+    if current["form"] != "10-K":
+        warnings.insert(0, "Financial trend cards are unavailable for this filing's XBRL taxonomy.")
+    if current.get("currency") == "CAD":
+        warnings.append("Charts are omitted because this filing reports Canadian dollars and chart data requires US dollars.")
+    elif current.get("currency") == "unknown":
+        warnings.append("Charts are omitted because the filing's reporting currency could not be verified.")
 
     # Gemini reports chart values in billions; the API returns raw USD everywhere.
     segments = [{"name": p.name, "value": p.value * 1e9} for p in result.charts.revenue_segments]
@@ -241,6 +251,8 @@ def run_pipeline(query: str) -> tuple[dict, bool]:
     else:
         deployment = [{"name": p.name, "value": p.value * 1e9} for p in result.charts.capital_deployment]
         deployment_source = "gemini"
+    if current.get("currency") in ("CAD", "unknown"):
+        segments, deployment = [], []
 
     normalized_source = filing_source(current)
     index = figure_index(filing_texts(current), fin)
@@ -256,6 +268,7 @@ def run_pipeline(query: str) -> tuple[dict, bool]:
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "filing": {
             "form": current["form"],
+            "currency": current.get("currency"),
             "accession_number": current["accession_number"],
             "filing_date": current["filing_date"],
             "report_date": current["report_date"],
