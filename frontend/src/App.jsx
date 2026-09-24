@@ -1,13 +1,21 @@
-import { ExternalLink, Landmark, ShieldAlert, TrendingUp, TriangleAlert } from 'lucide-react'
+import { ExternalLink, Info, Landmark, ShieldAlert, TrendingUp, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
 import AnalysisSection from './components/AnalysisSection'
 import CapitalDeploymentChart from './components/CapitalDeploymentChart'
+import KpiStrip from './components/KpiStrip'
 import LoadingState from './components/LoadingState'
 import RevenueMixChart from './components/RevenueMixChart'
 import SearchHeader from './components/SearchHeader'
+import { MarginsChart, RevenueFcfChart } from './components/TrendCharts'
 import { getJson } from './lib/api'
+import { fiscalYearLabel } from './lib/format'
 
 const QUICK_TICKERS = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'JPM']
+
+const MDNA_SOURCE_LABELS = {
+  item7: 'Item 7 MD&A',
+  fallback: 'Full filing (Item 7 not isolated)',
+}
 
 const SECTIONS = [
   { key: 'revenue_drivers', title: 'Revenue Drivers', icon: TrendingUp },
@@ -16,8 +24,8 @@ const SECTIONS = [
 ]
 
 function CompanyHeader({ data }) {
-  const fiscalYear = data.report_date ? `FY${data.report_date.slice(0, 4)}` : 'FY'
-  const isItem7 = data.extraction_method === 'item7'
+  const { filing } = data
+  const isFallback = filing.mdna_source === 'fallback'
 
   return (
     <div className="mb-6 flex flex-col gap-3 border-b border-line pb-5 sm:flex-row sm:items-end sm:justify-between">
@@ -28,25 +36,21 @@ function CompanyHeader({ data }) {
             {data.ticker}
           </span>
         </div>
-        <p className="mt-1 text-sm text-ink-2">{fiscalYear} MD&amp;A Analysis</p>
+        <p className="mt-1 text-sm text-ink-2">{fiscalYearLabel(filing.report_date)} MD&amp;A Analysis</p>
       </div>
 
       <dl className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
-        {data.filing_date && (
-          <div className="flex gap-1.5">
-            <dt className="text-muted">10-K filed</dt>
-            <dd className="font-mono text-ink-2">{data.filing_date}</dd>
-          </div>
-        )}
+        <div className="flex gap-1.5">
+          <dt className="text-muted">10-K filed</dt>
+          <dd className="font-mono text-ink-2">{filing.filing_date}</dd>
+        </div>
         <div className="flex gap-1.5">
           <dt className="text-muted">Source</dt>
-          <dd className={isItem7 ? 'text-ink-2' : 'text-[#c98500]'}>
-            {isItem7 ? 'Item 7 MD&A' : 'Full filing (Item 7 not isolated)'}
-          </dd>
+          <dd className={isFallback ? 'text-[#c98500]' : 'text-ink-2'}>{MDNA_SOURCE_LABELS[filing.mdna_source]}</dd>
         </div>
-        {data.document_url && (
+        {filing.document_url && (
           <a
-            href={data.document_url}
+            href={filing.document_url}
             target="_blank"
             rel="noreferrer"
             className="flex items-center gap-1 text-accent hover:text-accent-hover"
@@ -56,6 +60,20 @@ function CompanyHeader({ data }) {
         )}
       </dl>
     </div>
+  )
+}
+
+function Warnings({ items }) {
+  if (!items?.length) return null
+  return (
+    <ul className="mb-6 space-y-1.5">
+      {items.map((w) => (
+        <li key={w} className="flex items-start gap-2 rounded-md border border-line bg-panel px-3 py-2 text-xs text-ink-2">
+          <Info size={14} className="mt-px shrink-0 text-muted" />
+          {w}
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -135,6 +153,16 @@ export default function App() {
         {data && !loading && (
           <>
             <CompanyHeader data={data} />
+            <Warnings items={data.warnings} />
+            {data.financials && (
+              <>
+                <KpiStrip kpis={data.financials.kpis} />
+                <div className="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+                  <RevenueFcfChart years={data.financials.years} />
+                  <MarginsChart years={data.financials.years} />
+                </div>
+              </>
+            )}
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
               <div className="space-y-6">
                 {SECTIONS.map((s) => (
@@ -148,7 +176,10 @@ export default function App() {
               </div>
               <aside className="space-y-6 lg:sticky lg:top-24 lg:self-start">
                 <RevenueMixChart data={data.charts?.revenue_segments ?? []} />
-                <CapitalDeploymentChart data={data.charts?.capital_deployment ?? []} />
+                <CapitalDeploymentChart
+                  data={data.charts?.capital_deployment ?? []}
+                  source={data.charts?.capital_deployment_source}
+                />
               </aside>
             </div>
           </>

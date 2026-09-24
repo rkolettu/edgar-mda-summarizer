@@ -1,4 +1,4 @@
-export function ChartCard({ title, subtitle, icon: Icon, children }) {
+export function ChartCard({ title, subtitle, icon: Icon, footer, children }) {
   return (
     <section className="rounded-lg border border-line bg-panel">
       <header className="flex items-center gap-2.5 border-b border-line px-5 py-3.5">
@@ -7,11 +7,12 @@ export function ChartCard({ title, subtitle, icon: Icon, children }) {
         {subtitle && <span className="ml-auto text-xs text-muted">{subtitle}</span>}
       </header>
       <div className="p-5">{children}</div>
+      {footer && <footer className="border-t border-line px-5 py-2.5 text-[11px] text-muted">{footer}</footer>}
     </section>
   )
 }
 
-export function ChartTooltip({ active, payload, total, formatValue, formatShare }) {
+export function ChartTooltip({ active, payload, formatValue }) {
   if (!active || !payload?.length) return null
   const { name, value } = payload[0].payload
   return (
@@ -19,7 +20,6 @@ export function ChartTooltip({ active, payload, total, formatValue, formatShare 
       <div className="font-medium text-ink">{name}</div>
       <div className="mt-0.5 font-mono text-ink-2 tabular-nums">
         {formatValue(value)}
-        {total ? <span className="text-muted"> · {formatShare(value, total)}</span> : null}
       </div>
     </div>
   )

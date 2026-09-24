@@ -10,6 +10,7 @@ from fastapi import HTTPException
 SEC_HEADERS = {"User-Agent": "RishabKolettu InvestmentResearch (rishab@example.com)"}
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{padded_cik}.json"
+COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{padded_cik}.json"
 ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession_no_dashes}/{filename}"
 REQUEST_TIMEOUT = 30
 
@@ -99,6 +100,10 @@ def resolve_company(query: str) -> dict:
 
 def get_submissions(cik: int) -> dict:
     return sec_get(SUBMISSIONS_URL.format(padded_cik=str(cik).zfill(10))).json()
+
+
+def get_companyfacts(cik: int) -> dict:
+    return sec_get(COMPANYFACTS_URL.format(padded_cik=str(cik).zfill(10))).json()
 
 
 def find_filings(submissions: dict, form: str, limit: int) -> list[dict]:

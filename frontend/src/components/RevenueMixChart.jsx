@@ -1,7 +1,7 @@
 import { ChartPie } from 'lucide-react'
 import { useState } from 'react'
 import { Cell, Pie, PieChart, ResponsiveContainer } from 'recharts'
-import { formatBillions, formatPercent } from '../lib/format'
+import { formatShare, formatUsd } from '../lib/format'
 import { ChartCard, EmptyChart } from './ChartCard'
 
 // Order validated for CVD + normal-vision separation on the panel surface, including the donut's wrap-around pair.
@@ -65,12 +65,12 @@ export default function RevenueMixChart({ data }) {
                   <span className="max-w-[9rem] truncate text-[11px] tracking-wide text-ink-2 uppercase">
                     {focus.name}
                   </span>
-                  <span className="text-xl font-semibold text-ink">{formatBillions(focus.value)}</span>
-                  <span className="font-mono text-xs text-muted">{formatPercent(focus.value, total)} of total</span>
+                  <span className="text-xl font-semibold text-ink">{formatUsd(focus.value)}</span>
+                  <span className="font-mono text-xs text-muted">{formatShare(focus.value, total)} of total</span>
                 </>
               ) : (
                 <>
-                  <span className="text-xl font-semibold text-ink">{formatBillions(total)}</span>
+                  <span className="text-xl font-semibold text-ink">{formatUsd(total)}</span>
                   <span className="text-[11px] tracking-wide text-muted uppercase">Total</span>
                 </>
               )}
@@ -93,9 +93,9 @@ export default function RevenueMixChart({ data }) {
                       <span className="text-ink-2">{d.name}</span>
                     </span>
                   </td>
-                  <td className="py-2 text-right font-mono text-ink tabular-nums">{formatBillions(d.value)}</td>
+                  <td className="py-2 text-right font-mono text-ink tabular-nums">{formatUsd(d.value)}</td>
                   <td className="w-16 py-2 pr-1 text-right font-mono text-muted tabular-nums">
-                    {formatPercent(d.value, total)}
+                    {formatShare(d.value, total)}
                   </td>
                 </tr>
               ))}
