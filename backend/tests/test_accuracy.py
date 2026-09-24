@@ -43,7 +43,7 @@ def test_reference_figures_sent_to_every_gemini_call(client, fake_gemini, with_x
     by_schema = {c["schema"]: c for c in fake_gemini.calls}
     for schema in ("Analysis", "Changes", "QuarterUpdate"):
         contents = by_schema[schema]["contents"]
-        assert "REFERENCE FIGURES (from the company's audited SEC XBRL data; authoritative):" in contents
+        assert "REFERENCE FIGURES (from the company's SEC XBRL data; authoritative values):" in contents
         assert "Revenue $416.2B" in contents
         assert "REFERENCE FIGURES: When a REFERENCE FIGURES block is provided" in by_schema[schema]["config"].system_instruction
     assert "Quarter ended 2025-12-27 (Q1 FY2026): Revenue $138.4B (+11.3%" in by_schema["QuarterUpdate"]["contents"]

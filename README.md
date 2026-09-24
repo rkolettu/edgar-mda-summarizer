@@ -18,12 +18,12 @@ When the app cannot isolate MD&A, it returns an error rather than summarizing an
 
 How the AI analysis is checked:
 
-- Gemini receives the company's audited SEC XBRL figures (revenue, margins, cash flows, buybacks, EPS, latest quarter) and is told to use those exact values and not to calculate new ones. It runs at temperature 0.
+- Gemini receives the company's SEC XBRL figures (revenue, margins, cash flows, buybacks, EPS, latest quarter) and is told to use those exact values and not to calculate new ones. Quarterly figures are generally unaudited. It runs at temperature 0.
 - Every insight must quote one sentence from the filing. The quote is matched against the filing text.
-- Every dollar amount and percentage in an insight's headline and paragraph is matched against the numbers in the filing text (including tables stated in thousands or millions, respecting the stated precision) and the XBRL data, including the latest-year margins and growth rates derived from it.
+- Every dollar amount and percentage in an insight's headline and paragraph is checked for a numerical match in the filing text (including tables with a nearby stated scale) or XBRL data, including recent margins and growth rates derived from it.
 - Insights whose quote is not found are hidden by default. Figures that could not be traced are underlined.
 
-These checks confirm that each quote and figure appears in the source; they do not prove the AI used it in the right context. Review the original filings before using the output in an investment decision.
+These checks confirm that the quote appears in the source and that the numerical values appear somewhere in the filing or XBRL data. They do not prove a value belongs to the claimed metric or period, or that the AI used it in the right context. Review the original filings before using the output in an investment decision.
 
 ## Tests
 

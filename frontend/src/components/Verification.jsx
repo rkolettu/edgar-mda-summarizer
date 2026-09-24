@@ -13,7 +13,7 @@ export function FigureText({ text, spans }) {
     parts.push(
       <mark
         key={s.start}
-        title="Not found in the filing text or SEC financial data"
+        title="Value not found in the filing text or SEC financial data"
         className="bg-transparent text-inherit underline decoration-dotted decoration-2 underline-offset-4"
         style={{ textDecorationColor: STATUS.warning }}
       >
@@ -31,8 +31,8 @@ function evidenceLabel(item, where) {
   const { total, untraced } = figureCounts(item)
   const noun = (n) => (n === 1 ? 'figure' : 'figures')
   if (status === 'unverified') return item.evidence ? `Quote not found verbatim in ${where}` : 'No source quote provided'
-  if (status === 'partial') return `Quote verified · ${untraced} of ${total} ${noun(total)} not found in ${where} or SEC data`
-  return total ? `Quote and all ${total} ${noun(total)} verified in ${where} or SEC data` : `Quote verified in ${where}`
+  if (status === 'partial') return `Quote found · ${untraced} of ${total} ${noun(total)} not found in ${where} or SEC data`
+  return total ? `Quote found · ${total} ${noun(total)} also found in ${where} or SEC data` : `Quote found in ${where}`
 }
 
 export function Evidence({ item, where = 'filing' }) {
