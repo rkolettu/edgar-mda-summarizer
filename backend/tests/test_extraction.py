@@ -303,3 +303,119 @@ def test_quoted_section_reference_is_not_a_heading():
 ])
 def test_detect_currency(text, expected):
     assert sec.detect_currency(text) == expected
+
+
+def test_item7_heading_with_pipe_separator_as_in_aig():
+    text = text_of(
+        "<p>ITEM 6 [Reserved] 33 ITEM 7 Management's Discussion and Analysis of Financial Condition and Results of Operations 34 "
+        "ITEM 7A Quantitative and Qualitative Disclosures About Market Risk 110</p>"
+        f"<p>ITEM 7 | Management's Discussion and Analysis of Financial Condition and Results of Operations</p><p>{MDNA_BODY}</p>"
+        "<p>ITEM 7A | Quantitative and Qualitative Disclosures About Market Risk</p>"
+    )
+    assert sec.extract_item7(text).startswith("ITEM 7 | Management's Discussion")
+
+
+def test_item7_heading_with_company_name_as_in_bank_of_america():
+    text = text_of(
+        "<p>Item 7. Bank of America Corporation and Subsidiaries Management's Discussion and Analysis of Financial Condition "
+        f"and Results of Operations</p><p>{MDNA_BODY}</p><p>Item 7A. Quantitative and Qualitative Disclosures about Market Risk</p>"
+    )
+    assert "Net sales increased 8%" in sec.extract_item7(text)
+
+
+def annual_report_style_10k():
+    return text_of(
+        "<p>CONTENTS Overview 4 MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS 8 "
+        "Executive Summary 8 Recent Developments 11</p>"
+        "<p>Our results are discussed in the section titled Management's Discussion and Analysis of Financial Condition "
+        'and Results of Operations. See "Management\'s Discussion and Analysis" for segment detail. ' + "Business detail. " * 200 + "</p>"
+        "<p>Reports may be viewed at www.sec.gov.</p>"
+        f"<p>MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS EXECUTIVE SUMMARY</p><p>{MDNA_BODY}</p>"
+        "<p>MANAGEMENT'S DISCUSSION OF FINANCIAL RESPONSIBILITY Management is responsible for the statements.</p>"
+        "<p>REPORT OF INDEPENDENT REGISTERED PUBLIC ACCOUNTING FIRM</p><p>Audited financial statements.</p>"
+        "<p>Form 10-K Cross-Reference Index 7. Management's Discussion and Analysis of Financial Condition and Results of "
+        "Operations 8-36, 64-120 7A. Quantitative and Qualitative Disclosures About Market Risk 90-110</p>"
+    )
+
+
+def test_annual_report_style_10k_without_item7_heading(fake_sec):
+    mdna = sec.extract_mdna(BANK_CIK, FILING, annual_report_style_10k(), "https://doc")
+    assert mdna["source"] == "item7"
+    assert mdna["text"].startswith("MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS EXECUTIVE")
+    assert "Net sales increased 8%" in mdna["text"]
+    assert "Business detail" not in mdna["text"]
+    assert "Audited financial statements" not in mdna["text"]
+
+
+def test_heading_position_rules():
+    text = "Reports may be viewed at www.sec.gov. Management's Discussion and Analysis Overview Our results improved."
+    start = text.index("Management's")
+    assert sec.is_heading_position(text, start, start + 37)
+    reference = "as described in the section titled Management's Discussion and Analysis of results."
+    start = reference.index("Management's")
+    assert not sec.is_heading_position(reference, start, start + 37)
+    toc = "About Us 4 Management's Discussion and Analysis 7 Consolidated Results 8 Segment Operations 9"
+    start = toc.index("Management's")
+    assert not sec.is_heading_position(toc, start, start + 37)
+    assert sec.MDNA_TITLE.search("MANAGEMENT'S DISCUSSION OF FINANCIAL RESPONSIBILITY") is None
+
+
+def test_exhibit13_section_named_by_item7_pointer_as_in_wells_fargo(fake_sec):
+    fake_sec.add_text(INDEX_URL, index_html([
+        ("Annual report", "/Archives/edgar/data/19617/000001961726000044/corp-ex13.htm", "EX-13"),
+    ]))
+    fake_sec.add_text(EX13_URL, (
+        "<p>Exhibit 13 Financial Review 2 Overview 2 Earnings Performance 5 Risk Management 20</p>"
+        "<p>This Annual Report, including the Financial Review and the Financial Statements, contains forward-looking statements. "
+        + "Forward-looking detail. " * 100 + "</p>"
+        f"<p>Financial Review Overview</p><p>{MDNA_BODY}</p>"
+        "<p>Management's Report on Internal Control over Financial Reporting</p><p>Controls text.</p>"
+    ))
+    filing_text = text_of(
+        "<p>ITEM 7. MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS Information in "
+        'response to this Item 7 can be found in the 2025 Annual Report to Shareholders under "Financial Review." That '
+        "information is incorporated into this Item by reference.</p><p>ITEM 8. FINANCIAL STATEMENTS</p>"
+    )
+    mdna = sec.extract_mdna(BANK_CIK, FILING, filing_text, "https://doc")
+    assert mdna["source"] == "exhibit13"
+    assert mdna["text"].startswith("Financial Review Overview")
+    assert "Forward-looking detail" not in mdna["text"]
+    assert "Controls text" not in mdna["text"]
+
+
+def test_exhibit13_management_discussion_title_as_in_ibm(fake_sec):
+    fake_sec.add_text(INDEX_URL, index_html([
+        ("Annual report", "/Archives/edgar/data/19617/000001961726000044/corp-ex13.htm", "EX-13"),
+    ]))
+    fake_sec.add_text(EX13_URL, (
+        "<p>Exhibit 13 5 MANAGEMENT DISCUSSION NOTES TO FINANCIAL STATEMENTS Overview 6 Policies 7 Snapshot 8</p>"
+        f"<p>Table of Contents 6 Management Discussion International Business Machines Corporation OVERVIEW</p><p>{MDNA_BODY}</p>"
+        "<p>Management's Report on Internal Control Over Financial Reporting</p>"
+    ))
+    filing_text = text_of(
+        "<p>Item 7. Management's Discussion and Analysis of Financial Condition and Results of Operations: Refer to pages 6 "
+        "through 38 of the 2025 Annual Report.</p><p>Item 8. Financial Statements</p>"
+    )
+    mdna = sec.extract_mdna(BANK_CIK, FILING, filing_text, "https://doc")
+    assert mdna["text"].startswith("Management Discussion International Business Machines")
+
+
+def test_predecessor_registrant_from_successor_8k12b(fake_sec):
+    successor = {"cik": 2115436, "filings": {"recent": {
+        "form": ["8-K12B"], "accessionNumber": ["0001193125-26-291990"], "primaryDocument": ["d8k12b.htm"],
+        "filingDate": ["2026-07-01"], "reportDate": ["2026-07-01"],
+    }}}
+    fake_sec.add_text(
+        sec.archive_url(2115436, "0001193125-26-291990", "d8k12b.htm"),
+        "<p>Explanatory Note On July 1, 2026, Exxon Mobil Corporation, a New Jersey corporation and the predecessor "
+        'registrant ("ExxonMobil"), completed its previously announced redomiciliation reorganization.</p>',
+    )
+    fake_sec.add_text(
+        sec.COMPANY_SEARCH_URL.format(name="Exxon+Mobil+Corp"),
+        "<feed><company-info><cik>0000034088</cik><conformed-name>EXXON MOBIL CORP</conformed-name></company-info></feed>",
+    )
+    assert sec.find_predecessor_cik(successor) == 34088
+
+
+def test_no_predecessor_without_reorganization_filing(fake_sec):
+    assert sec.find_predecessor_cik({"cik": 1, "filings": {"recent": {"form": ["8-K"]}}}) is None

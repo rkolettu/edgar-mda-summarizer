@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 from functools import lru_cache
-from urllib.parse import urljoin
+from urllib.parse import quote_plus, urljoin
 
 import requests
 from bs4 import BeautifulSoup
@@ -20,9 +20,14 @@ RISK_FACTORS_CHARS = 80_000
 MIN_SECTION_CHARS = 2_000
 FOREIGN_MDNA_CHARS = 120_000
 
-SEP = r"\s*[.:\-–—]?\s*"
-ITEM7_START = re.compile(rf"i\s*t\s*e\s*m\s*7{SEP}management'?s\s+discussion\s+and\s+analysis", re.IGNORECASE)
-ITEM7_END = re.compile(r"i\s*t\s*e\s*m\s*(?:7a\s*[.:\-–—]?\s+quantitative|8\s*(?:[.:\-–—]|\s+financial\s+statements))", re.IGNORECASE)
+SEP = r"\s*[.:\-–—|]?\s*"
+# Some filers repeat the company name inside the heading ("Item 7. Bank of America Corporation and Subsidiaries
+# Management's Discussion and Analysis").
+ITEM7_START = re.compile(
+    rf"i\s*t\s*e\s*m\s*7{SEP}(?:[A-Z][\w.,&' ]{{2,80}}?\s+and\s+subsidiaries\s+)?management'?s\s+discussion\s+and\s+analysis",
+    re.IGNORECASE,
+)
+ITEM7_END = re.compile(r"i\s*t\s*e\s*m\s*(?:7a\s*[.:\-–—|]?\s+quantitative|8\s*(?:[.:\-–—|]|\s+financial\s+statements))", re.IGNORECASE)
 ITEM1A_START = re.compile(rf"i\s*t\s*e\s*m\s*1a{SEP}risk\s+factors", re.IGNORECASE)
 ITEM1A_END = re.compile(
     rf"i\s*t\s*e\s*m\s*1b{SEP}unresolved\s+staff|i\s*t\s*e\s*m\s*1c{SEP}cybersecurity|i\s*t\s*e\s*m\s*2{SEP}properties", re.IGNORECASE
@@ -138,6 +143,47 @@ def get_submissions(cik: int) -> dict:
     return sec_get(SUBMISSIONS_URL.format(padded_cik=str(cik).zfill(10))).json()
 
 
+# A holding-company reorganization gives the listed ticker a new registrant whose annual reports are still
+# filed under the predecessor, as with ExxonMobil Holdings Corp (2026) and Exxon Mobil Corporation.
+SUCCESSOR_FORMS = ("8-K12B", "8-K12G3")
+PREDECESSOR = re.compile(
+    r"([A-Z][A-Za-z0-9.&' -]{1,80}?),\s+an?\s+[A-Za-z ]{2,40}?(?:[Cc]orporation|[Cc]ompany)\s*(?:\([^)]{0,80}\)\s*)?,?\s+"
+    r"(?:and\s+)?(?:the\s+)?[Pp]redecessor"
+)
+COMPANY_SEARCH_URL = (
+    "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={name}&type=10-K&dateb=&owner=include&count=10&output=atom"
+)
+
+
+def edgar_company_name(name: str) -> str:
+    """EDGAR's conformed spelling of a legal name ("Exxon Mobil Corporation" -> "Exxon Mobil Corp")."""
+    name = re.sub(r"[.,]", "", name).strip()
+    for long, short in (("Corporation", "Corp"), ("Incorporated", "Inc"), ("Company", "Co"), ("Limited", "Ltd")):
+        name = re.sub(rf"\b{long}$", short, name)
+    return name
+
+
+def find_predecessor_cik(submissions: dict) -> int | None:
+    recent = submissions.get("filings", {}).get("recent", {})
+    for i, form in enumerate(recent.get("form", [])):
+        if form not in SUCCESSOR_FORMS:
+            continue
+        try:
+            cik = int(submissions.get("cik") or 0)
+            text = html_to_text(sec_get(archive_url(cik, recent["accessionNumber"][i], recent["primaryDocument"][i])).text)
+            match = PREDECESSOR.search(text[:30_000])
+            if not match:
+                continue
+            name = edgar_company_name(match.group(1))
+            feed = sec_get(COMPANY_SEARCH_URL.format(name=quote_plus(name))).text
+        except (HTTPException, KeyError, ValueError):
+            continue
+        info = re.search(r"<company-info>.*?<cik>(\d+)</cik>.*?<conformed-name>([^<]+)</conformed-name>", feed, re.DOTALL)
+        if info and int(info.group(1)) != cik and edgar_company_name(info.group(2)).upper().startswith(name.upper()):
+            return int(info.group(1))
+    return None
+
+
 def get_companyfacts(cik: int) -> dict:
     return sec_get(COMPANYFACTS_URL.format(padded_cik=str(cik).zfill(10))).json()
 
@@ -177,7 +223,7 @@ def html_to_text(html: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-ANY_ITEM_HEADING = re.compile(r"\bi\s*t\s*e\s*m\s*\d{1,2}[a-c]?\s*[.:\-–—]?\s", re.IGNORECASE)
+ANY_ITEM_HEADING = re.compile(r"\bi\s*t\s*e\s*m\s*\d{1,2}[a-c]?\s*[.:\-–—|]?\s", re.IGNORECASE)
 TOC_WINDOW = 150
 
 
@@ -212,6 +258,54 @@ def extract_section(text: str, start_re: re.Pattern, end_re: re.Pattern, min_cha
         if len(section) > len(best):
             best = section
     return best if len(best) >= min_chars else None
+
+
+# Headings of an MD&A that is laid out as an annual report chapter rather than under "Item 7".
+# IBM titles it "Management Discussion"; "Management's Discussion of Financial Responsibility" is a different section.
+MDNA_TITLE = re.compile(
+    r"management'?s\s+discussion\s+and\s+analysis(?:\s+of\s+financial\s+condition\s+and\s+results\s+of\s+operations)?"
+    r"|management\s+discussion\b(?!\s+of\b)",
+    re.IGNORECASE,
+)
+TITLED_SECTION_CHARS = 400_000
+PAGE_NUMBER = re.compile(r"(?<![\w$.,])\d{1,3}(?![\w%]|[.,]\d)")
+# Item 7 pointers name the annual report section: 'under the heading "Management's Discussion and Analysis."'
+POINTER_TITLE = re.compile(r"under\s+(?:the\s+(?:heading|caption|section)s?\s+)?\"([^\"]{3,80}?)\.?\"", re.IGNORECASE)
+
+
+def is_heading_position(text: str, start: int, end: int) -> bool:
+    """True when a title match sits where a heading would: after a sentence end, page number or another heading,
+    and not in a quote, a prose reference ("in the section titled ...") or a table of contents line."""
+    before = text[max(0, start - 60):start].rstrip()
+    if not before:
+        return True
+    if before[-1] in "\"'‘“":
+        return False
+    previous = before.split()[-1]
+    if previous[0].islower() and previous[-1] not in ".:;!?)":
+        return False
+    # A table of contents line is followed by page numbers.
+    return len(PAGE_NUMBER.findall(text[end:end + 150])) < 2
+
+
+def extract_titled_section(text: str, title: re.Pattern, end_re: re.Pattern, min_chars: int = 5_000) -> str | None:
+    headings = [m for m in title.finditer(text) if is_heading_position(text, m.start(), m.end())]
+    # Prefer a capitalized chapter heading over title-case running headers.
+    headings.sort(key=lambda m: not m.group(0).isupper())
+    for start in headings:
+        end = next((m for m in end_re.finditer(text, start.end()) if not is_cross_reference(text, m.start())), None)
+        if end and end.start() - start.start() >= min_chars:
+            return text[start.start():min(end.start(), start.start() + TITLED_SECTION_CHARS)]
+    return None
+
+
+def pointer_title(text: str) -> re.Pattern | None:
+    """The annual report section an incorporated-by-reference Item 7 points to, as a heading pattern."""
+    for start in ITEM7_START.finditer(text):
+        match = POINTER_TITLE.search(text, start.end(), start.end() + 600)
+        if match:
+            return re.compile(r"\s+".join(re.escape(word) for word in match.group(1).split()), re.IGNORECASE)
+    return None
 
 
 def extract_item7(text: str) -> str | None:
@@ -407,12 +501,22 @@ def extract_mdna(cik: int, filing: dict, filing_text: str, document_url: str) ->
     if inline:
         return {"text": inline, "source": "item7", "url": document_url}
 
-    # Some filers (often banks) incorporate MD&A by reference to the annual report filed as Exhibit 13.
+    # Some filers (often banks) incorporate MD&A by reference to the annual report filed as Exhibit 13,
+    # sometimes under another title that the Item 7 pointer names (Wells Fargo: "Financial Review").
     exhibit_url = find_exhibit(cik, filing["accession_number"], "EX-13")
     if exhibit_url:
         exhibit_text = html_to_text(sec_get(exhibit_url).text)
         mdna = extract_section(exhibit_text, ANNUAL_REPORT_MDNA_START, ANNUAL_REPORT_MDNA_END)
+        for title in (pointer_title(filing_text), MDNA_TITLE):
+            if mdna or title is None:
+                continue
+            mdna = extract_titled_section(exhibit_text, title, ANNUAL_REPORT_MDNA_END)
         if mdna:
             return {"text": mdna, "source": "exhibit13", "url": exhibit_url}
+
+    # Annual-report-style 10-Ks (Citi, GE, Honeywell) title the chapter without "Item 7".
+    chapter = extract_titled_section(filing_text, MDNA_TITLE, ANNUAL_REPORT_MDNA_END)
+    if chapter:
+        return {"text": chapter, "source": "item7", "url": document_url}
 
     raise HTTPException(status_code=422, detail="Could not isolate MD&A in this 10-K or its Exhibit 13.")

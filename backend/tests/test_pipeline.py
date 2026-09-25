@@ -85,6 +85,26 @@ def test_non_usd_20f_labels_currency_and_omits_charts(client, fake_sec, fake_gem
     assert "Label monetary amounts NT$" in summary_call["contents"]
 
 
+def test_reorganized_holding_company_uses_predecessor_filings(client, fake_sec, fake_gemini):
+    # The ticker now belongs to a new holding company whose only filing is the 8-K12B naming its predecessor.
+    fake_sec.add_json("https://data.sec.gov/submissions/CIK0000789019.json", {"cik": "789019", "name": "Holdings Corp", "filings": {"recent": {
+        "form": ["8-K12B"], "accessionNumber": ["0000789019-26-000001"], "primaryDocument": ["d8k12b.htm"],
+        "filingDate": ["2026-07-01"], "reportDate": ["2026-07-01"],
+    }}})
+    fake_sec.add_text(
+        sec.archive_url(789019, "0000789019-26-000001", "d8k12b.htm"),
+        "<p>On July 1, 2026, Apple Inc., a California corporation and the predecessor registrant, completed a reorganization.</p>",
+    )
+    fake_sec.add_text(
+        sec.COMPANY_SEARCH_URL.format(name="Apple+Inc"),
+        "<feed><company-info><cik>0000320193</cik><conformed-name>APPLE INC</conformed-name></company-info></feed>",
+    )
+    body = client.get("/api/summarize", params={"ticker": "MSFT"}).json()
+    assert body["ticker"] == "MSFT"
+    assert body["cik"] == 320193
+    assert body["filing"]["document_url"] == APPLE_10K_URL
+
+
 def test_every_sec_request_sends_user_agent(client, fake_sec):
     client.get("/api/summarize", params={"ticker": "AAPL"})
     assert fake_sec.calls

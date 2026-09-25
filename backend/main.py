@@ -199,8 +199,18 @@ def run_pipeline(query: str) -> tuple[dict, bool]:
 
     submissions = sec.get_submissions(cik)
     forms = {"10-K": sec.load_10k, "20-F": sec.load_20f, "40-F": sec.load_40f}
-    annual_groups = [filings for form in forms if (filings := sec.find_filings(submissions, form, limit=2))]
-    annual = max(annual_groups, key=lambda filings: filings[0]["filing_date"], default=None)
+
+    def latest_annual(submissions: dict) -> list[dict] | None:
+        annual_groups = [filings for form in forms if (filings := sec.find_filings(submissions, form, limit=2))]
+        return max(annual_groups, key=lambda filings: filings[0]["filing_date"], default=None)
+
+    annual = latest_annual(submissions)
+    if not annual:
+        # A newly reorganized holding company files its annual reports under the predecessor until its first 10-K.
+        predecessor = sec.find_predecessor_cik(submissions)
+        if predecessor:
+            cik, submissions = predecessor, sec.get_submissions(predecessor)
+            annual = latest_annual(submissions)
     if not annual:
         raise HTTPException(status_code=404, detail="No 10-K, 20-F, or 40-F found in the company's recent submissions.")
     current_filing = annual[0]
