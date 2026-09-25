@@ -4,3 +4,4 @@ requests
 beautifulsoup4
 google-generativeai==0.5.4
 pydantic
+protobuf>=7.0.0
