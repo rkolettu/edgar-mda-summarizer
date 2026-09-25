@@ -10,6 +10,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 import analysis
+import cache
 import figures
 import financials
 import sec
@@ -201,9 +202,17 @@ def run_pipeline(query: str) -> tuple[dict, bool]:
     tenq_filing = find_newer_10q(submissions, current_filing) if current_filing["form"] == "10-K" else None
 
     cache_key = (cik, *(f["accession_number"] if f else None for f in (current_filing, prior_filing, tenq_filing)))
+    # L1: Check in-memory LRU cache
     cached = RESULT_CACHE.get(cache_key)
     if cached is not None:
         return cached, False
+    # L2: Check SQLite persistent cache
+    db_key = str(cache_key)
+    db_cached = cache.db_cache.get(db_key)
+    if db_cached is not None:
+        # Warm up the in-memory cache for next time
+        RESULT_CACHE.put(cache_key, db_cached)
+        return db_cached, False
 
     company_name = submissions.get("name") or company["name"]
     pool = ThreadPoolExecutor(max_workers=8)
@@ -294,7 +303,11 @@ def run_pipeline(query: str) -> tuple[dict, bool]:
 
     degraded = any(s.degraded for s in (fin_section, changes, quarter))
     if not degraded:
+        # L1: Store in in-memory LRU cache
         RESULT_CACHE.put(cache_key, response)
+        # L2: Persist to SQLite cache for warm restarts
+        db_key = str(cache_key)
+        cache.db_cache.put(db_key, response)
     return response, degraded
 
 
@@ -304,7 +317,35 @@ def health():
     return {"status": "ok"}
 
 
+@router.get("/cache/stats")
+def cache_stats():
+    """Return cache statistics for debugging."""
+    db_stats = cache.db_cache.stats()
+    return {
+        "memory_cache_size": RESULT_CACHE._size,
+        "memory_cache_items": len(RESULT_CACHE._items),
+        "persistent_cache": db_stats,
+    }
+
+
+@router.post("/cache/clear")
+def cache_clear():
+    """Clear all caches. For ops/debugging only."""
+    RESULT_CACHE.clear()
+    cache.db_cache.clear()
+    return {"status": "cleared"}
+
+
 # Vercel Services forwards /api/... with the prefix intact; also serve the bare paths in case a
 # deployment strips it, so the routes work either way.
 app.include_router(router, prefix="/api")
 app.include_router(router)
+
+
+if __name__ == "__main__":
+    import sys
+    if "--clear-cache" in sys.argv:
+        print("Clearing all caches...")
+        RESULT_CACHE.clear()
+        cache.db_cache.clear()
+        print("Caches cleared.")
