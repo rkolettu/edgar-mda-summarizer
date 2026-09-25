@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import threading
 from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
