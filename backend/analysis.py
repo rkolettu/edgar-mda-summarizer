@@ -5,8 +5,8 @@ import os
 import threading
 
 from fastapi import HTTPException
-from google import genai
-from google.genai import types
+import google.generativeai as genai
+from google.generativeai import types
 from pydantic import BaseModel, ValidationError
 
 GEMINI_MODEL = "gemini-2.5-flash"
