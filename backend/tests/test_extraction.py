@@ -419,3 +419,62 @@ def test_predecessor_registrant_from_successor_8k12b(fake_sec):
 
 def test_no_predecessor_without_reorganization_filing(fake_sec):
     assert sec.find_predecessor_cik({"cik": 1, "filings": {"recent": {"form": ["8-K"]}}}) is None
+
+
+REVIEW_BODY = "In 2025, we recorded net income of US$1,983 million, compared to US$2,100 million in 2024. " * 200
+
+
+def index_style_20f():
+    return (
+        "<p>TABLE OF CONTENTS III. OPERATING AND FINANCIAL REVIEW AND PROSPECTS 129 Overview 129 Results of Operations 133 "
+        "IV. CORPORATE GOVERNANCE 160</p>"
+        "<p>See Operating and Financial Review and Prospects—Liquidity and Capital Resources. " + "Business detail. " * 400 + "</p>"
+        "<p>Business overview Corporate governance Financial statements Operating and financial review and prospects General "
+        "facts Financial statements Other information " + "Governance detail. " * 1200 + "</p>"
+        f"<p>Table of Contents OPERATING AND FINANCIAL REVIEW AND PROSPECTS Overview {REVIEW_BODY}</p>"
+        "<p>IV. CORPORATE GOVERNANCE Board of Directors. " + "Board detail. " * 100 + "</p>"
+        "<p>Form 20-F cross reference 4A Unresolved staff comments None 5 Operating and financial review and prospects "
+        "5A Operating results Results of Operations 133 5B Liquidity and capital resources 150 6 Directors, senior management</p>"
+    )
+
+
+def test_20f_indexing_an_integrated_annual_report_as_in_vale(fake_sec):
+    result = load_20f_text(fake_sec, index_style_20f())
+    assert result["mdna"]["source"] == "annual_report"
+    assert result["mdna"]["text"].startswith("OPERATING AND FINANCIAL REVIEW AND PROSPECTS Overview In 2025")
+    assert "Governance detail" not in result["mdna"]["text"]
+    assert "Board detail" not in result["mdna"]["text"]
+    assert result["currency"] == "USD"
+
+
+def test_cross_reference_index_is_not_the_review():
+    assert sec.looks_like_index("A. Operating results 23-30, 36-41, 45-88, 276-288 B. Liquidity 12 C. Research 14 D. Trends 88")
+    assert sec.looks_like_index(
+        "5A Operating Results Business overview—Strategy; General facts—Alternative measures; Operating and financial "
+        "review—Results of segments; Financial statements—Note 2; Operating and financial review—Liquidity; Other—Risks;"
+    )
+    assert not sec.looks_like_index(REVIEW_BODY)
+
+
+def test_20f_review_in_annual_report_exhibit_as_in_astrazeneca(fake_sec):
+    accession = "0001104659-26-019130"
+    index_url = sec.FILING_INDEX_URL.format(cik=901832, accession_no_dashes=accession.replace("-", ""), accession=accession)
+    exhibit_url = "https://www.sec.gov/Archives/edgar/data/901832/000110465926019130/azn-ex15d1.htm"
+    fake_sec.add_text(index_url, index_html([("Annual Report", "/Archives/edgar/data/901832/000110465926019130/azn-ex15d1.htm", "EX-15.1")]))
+    nav = "Strategic Report Corporate Governance Financial Statements Sustainability Statement Additional Information "
+    fake_sec.add_text(exhibit_url, (
+        f"<p>{nav}Financial Review Business background and results overview {REVIEW_BODY}</p>"
+        f"<p>{nav}Financial Review Financial Review continued {REVIEW_BODY}</p>"
+        "<p>Corporate Governance Contents Chair's Introduction. " + "Governance detail. " * 100 + "</p>"
+    ))
+    filing = {"form": "20-F", "accession_number": accession, "primary_doc": "azn-20f.htm"}
+    fake_sec.add_text(sec.archive_url(901832, accession, "azn-20f.htm"), (
+        '<p>ITEM 5. OPERATING AND FINANCIAL REVIEW AND PROSPECTS The information set forth under the headings "Strategic '
+        'Report—Financial Review" on pages 50 to 64 of the Annual Report included as exhibit 15.1 to this Form 20-F is '
+        "incorporated by reference.</p><p>ITEM 6. DIRECTORS, SENIOR MANAGEMENT AND EMPLOYEES</p>"
+    ))
+    result = sec.load_20f(901832, filing)
+    assert result["mdna"]["url"] == exhibit_url
+    assert result["document_url"].endswith("azn-20f.htm")
+    assert result["mdna"]["text"].startswith("Financial Review Business background")
+    assert "Governance detail" not in result["mdna"]["text"]

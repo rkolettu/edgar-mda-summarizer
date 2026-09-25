@@ -276,26 +276,67 @@ POINTER_TITLE = re.compile(r"under\s+(?:the\s+(?:heading|caption|section)s?\s+)?
 def is_heading_position(text: str, start: int, end: int) -> bool:
     """True when a title match sits where a heading would: after a sentence end, page number or another heading,
     and not in a quote, a prose reference ("in the section titled ...") or a table of contents line."""
+    if not text[start].isupper():
+        return False
+    # "Strategic Report—Financial Review" is a path in a reference; "Group financial review; ..." a list item.
+    if text[start - 1:start] in ("—", "–") or text[end:end + 1] == ";":
+        return False
     before = text[max(0, start - 60):start].rstrip()
     if not before:
         return True
-    if before[-1] in "\"'‘“":
+    if before[-1] in "\"'‘“•":
         return False
     previous = before.split()[-1]
     if previous[0].islower() and previous[-1] not in ".:;!?)":
+        return False
+    # "Shell's financial performance", "See Operating and Financial Review ..." are prose, not headings.
+    if previous.endswith(("'s", "’s")) or is_cross_reference(text, start):
         return False
     # A table of contents line is followed by page numbers.
     return len(PAGE_NUMBER.findall(text[end:end + 150])) < 2
 
 
-def extract_titled_section(text: str, title: re.Pattern, end_re: re.Pattern, min_chars: int = 5_000) -> str | None:
+def looks_like_index(section: str) -> bool:
+    """A cross-reference index ("A. Operating results 23-30, 36-41", "Business overview—Strategy; ...",
+    '"Financial Review" on page 63') rather than the chapter it points to."""
+    head = section[:800]
+    return (
+        len(PAGE_NUMBER.findall(head)) >= 6
+        or head.count(";") + head.count("—") >= 8
+        or len(re.findall(r"\bon\s+pages?\b", head, re.IGNORECASE)) >= 2
+    )
+
+
+def extract_titled_section(
+    text: str, title: re.Pattern, end_re: re.Pattern, min_chars: int = 5_000, chapter_end: bool = False
+) -> str | None:
+    """The section under the first heading-positioned title, up to end_re. With chapter_end, the end must itself be
+    a heading at least min_chars later, so running headers and navigation bars do not cut the chapter short."""
     headings = [m for m in title.finditer(text) if is_heading_position(text, m.start(), m.end())]
+    def in_navigation_bar(match: re.Match, look_back: bool) -> bool:
+        # A navigation bar lists other chapters next to this one ("Corporate Governance Financial Statements Additional
+        # Information Financial Review ..."). A chapter's own pages carry the bar just before its title, so only an
+        # end marker is checked on both sides.
+        return any(
+            is_heading_position(text, e.start(), e.end())
+            for e in end_re.finditer(text, max(0, match.start() - 100) if look_back else match.end(), match.end() + 100)
+            if e.start() != match.start()
+        )
+
+    if chapter_end:
+        headings = [m for m in headings if not in_navigation_bar(m, look_back=False)]
     # Prefer a capitalized chapter heading over title-case running headers.
     headings.sort(key=lambda m: not m.group(0).isupper())
     for start in headings:
-        end = next((m for m in end_re.finditer(text, start.end()) if not is_cross_reference(text, m.start())), None)
-        if end and end.start() - start.start() >= min_chars:
-            return text[start.start():min(end.start(), start.start() + TITLED_SECTION_CHARS)]
+        ends = end_re.finditer(text, start.start() + min_chars if chapter_end else start.end())
+        end = next((m for m in ends if not is_cross_reference(text, m.start())
+                    and (not chapter_end or is_heading_position(text, m.start(), m.end()) and not in_navigation_bar(m, look_back=True))), None)
+        if not end or end.start() - start.start() < min_chars:
+            continue
+        section = text[start.start():min(end.start(), start.start() + TITLED_SECTION_CHARS)]
+        if chapter_end and looks_like_index(section):
+            continue
+        return section
     return None
 
 
@@ -390,19 +431,67 @@ FORTYF_REFERENCE = re.compile(
 )
 
 
+# 20-Fs that are a cross-reference index into an integrated annual report title the operating review as an annual
+# report chapter (Unilever "Group Financial Review", Vale and ICICI Bank "Operating and Financial Review and Prospects"
+# without an Item number, HDFC Bank "Management's Discussion and Analysis", Petrobras "Consolidated Financial Performance").
+ANNUAL_REPORT_REVIEW_TITLES = [
+    re.compile(r"operating\s+and\s+financial\s+reviews?\s+and\s+prospects", re.IGNORECASE),
+    MDNA_TITLE,
+    re.compile(r"(?:group\s+)?financial\s+review", re.IGNORECASE),
+    re.compile(r"operating\s+and\s+financial\s+review", re.IGNORECASE),
+    re.compile(r"(?:group|consolidated)\s+financial\s+performance", re.IGNORECASE),
+]
+ANNUAL_REPORT_CHAPTER_END = re.compile(
+    r"corporate\s+governance|risk\s+review|principal\s+risks|risk\s+factors|directors'?\s+remuneration|remuneration\s+report"
+    r"|financial\s+statements|shareholder\s+information|additional\s+information|report\s+of\s+(?:the\s+)?independent"
+    r"|independent\s+auditor|i\s*t\s*e\s*m\s*6\b",
+    re.IGNORECASE,
+)
+
+
+ANNUAL_REPORT_REVIEW_CHARS = 15_000
+# "... set forth under ... in the Annual Report 2025 included as exhibit 15.1 to this Form 20-F ... is incorporated by reference."
+ANNUAL_REPORT_EXHIBIT = re.compile(r"exhibit\s+(15\.\d|99\.\d)", re.IGNORECASE)
+
+
+def extract_annual_report_review(text: str) -> str | None:
+    for title in ANNUAL_REPORT_REVIEW_TITLES:
+        section = extract_titled_section(
+            text, title, ANNUAL_REPORT_CHAPTER_END, min_chars=ANNUAL_REPORT_REVIEW_CHARS, chapter_end=True
+        )
+        if section:
+            return section
+    return None
+
+
 def load_20f(cik: int, filing: dict) -> dict:
     document_url = archive_url(cik, filing["accession_number"], filing["primary_doc"])
     text = html_to_text(sec_get(document_url).text)
+    mdna_url = document_url
     operating = extract_section(text, UBS_OPERATING_START, UBS_OPERATING_END)
     source = "operating_review"
     if not operating:
         operating = extract_section(text, TWENTYF_START, TWENTYF_END)
         source = "item5"
+    # An incorporated-by-reference Item 5 is not the underlying management discussion.
+    reference_only = bool(operating) and (
+        len(operating) < 5_000 or "incorporated by reference" in operating[:1_500].lower() and len(operating) < 10_000
+    )
+    # Keep the Item 5 pointer, however short, to follow it to an annual report exhibit.
+    reference = operating if reference_only else None if operating else extract_section(text, TWENTYF_START, TWENTYF_END, min_chars=1)
+    if not operating or reference_only:
+        operating, source = extract_annual_report_review(text), "annual_report"
+    if not operating and reference:
+        # Item 5 incorporates the review from the annual report filed as an exhibit (AstraZeneca: exhibit 15.1).
+        exhibit = ANNUAL_REPORT_EXHIBIT.search(reference)
+        exhibit_url = exhibit and find_exhibit(cik, filing["accession_number"], f"EX-{exhibit.group(1)}")
+        if exhibit_url:
+            operating = extract_annual_report_review(html_to_text(sec_get(exhibit_url).text))
+            source, mdna_url = "annual_report", exhibit_url
+    if not operating and reference_only:
+        raise HTTPException(status_code=422, detail="The 20-F refers to a separate annual report; its management discussion could not be isolated.")
     if not operating:
         raise HTTPException(status_code=422, detail="Could not isolate the operating and financial review in this 20-F.")
-    # An incorporated-by-reference Item 5 is not the underlying management discussion.
-    if len(operating) < 5_000 or "incorporated by reference" in operating[:1_500].lower() and len(operating) < 10_000:
-        raise HTTPException(status_code=422, detail="The 20-F refers to a separate annual report; its management discussion could not be isolated.")
     risk_start = UBS_RISK_START.search(text)
     operating_start = UBS_OPERATING_START.search(text)
     risks = None
@@ -415,7 +504,7 @@ def load_20f(cik: int, filing: dict) -> dict:
         risks = extract_20f_risk_factors(text)
     operating = operating[:FOREIGN_MDNA_CHARS]
     return {**filing, "document_url": document_url, "currency": detect_currency(operating),
-            "mdna": {"text": operating, "source": source, "url": document_url},
+            "mdna": {"text": operating, "source": source, "url": mdna_url},
             "risk_factors": risks}
 
 
