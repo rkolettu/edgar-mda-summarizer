@@ -9,7 +9,8 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, ValidationError
 
-GEMINI_MODEL = "gemini-2.5-flash"
+# Google now limits 2.5 models to projects that already use them; set GEMINI_MODEL to move to a newer model.
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 SYSTEM_PROMPT = """
 You are an elite buy-side equity analyst. Analyze the annual filing's management discussion and output a strict JSON response.
@@ -140,6 +141,11 @@ def generate(system_prompt: str, contents: str, schema: type[BaseModel]) -> Base
             ) from exc
         raise HTTPException(status_code=502, detail=f"Gemini request failed: {exc}") from exc
 
+    usage = getattr(response, "usage_metadata", None)
+    if usage is not None:
+        # Printed so serverless logs record what each analysis costs.
+        print(f"gemini usage model={GEMINI_MODEL} schema={schema.__name__} input={getattr(usage, 'prompt_token_count', None)} "
+              f"output={getattr(usage, 'candidates_token_count', None)}", flush=True)
     try:
         return schema.model_validate(json.loads(response.text))
     except (TypeError, json.JSONDecodeError, ValidationError) as exc:

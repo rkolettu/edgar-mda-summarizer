@@ -240,6 +240,50 @@ def test_40f_rejects_financial_statement_exhibit(fake_sec):
         sec.load_40f(BANK_CIK, filing)
 
 
+def test_40f_prefers_exhibit_index_row_over_a_sentence_listing_several_exhibits(fake_sec):
+    # Suncor's cover sentence lists the AIF, statements and MD&A "included as Exhibit 99-1, Exhibit 99-2, Exhibit 99-3".
+    filing = {"form": "40-F", "accession_number": BANK_ACCESSION, "primary_doc": "bank40f.htm"}
+    url = sec.archive_url(BANK_CIK, BANK_ACCESSION, filing["primary_doc"])
+    aif = sec.archive_url(BANK_CIK, BANK_ACCESSION, "aif.htm")
+    exhibit = sec.archive_url(BANK_CIK, BANK_ACCESSION, "mdna.htm")
+    fake_sec.add_text(url, (
+        "<p>The Annual Information Form, Audited Consolidated Financial Statements, Management's Discussion and Analysis for "
+        "the year ended December 31, 2025, included as Exhibit 99-1, Exhibit 99-2, Exhibit 99-3, are incorporated.</p>"
+        "<table><tr><td>99-1</td><td>Annual Information Form</td></tr>"
+        "<tr><td>99-3</td><td>\u200b Management's Discussion and Analysis for the fiscal year ended December 31, 2025</td></tr></table>"
+    ))
+    fake_sec.add_text(INDEX_URL, index_html([
+        ("AIF", "/Archives/edgar/data/19617/000001961726000044/aif.htm", "EX-99.1"),
+        ("MD&A", "/Archives/edgar/data/19617/000001961726000044/mdna.htm", "EX-99.3"),
+    ]))
+    fake_sec.add_text(aif, "<p>Annual Information Form. " + MDNA_BODY + "</p>")
+    fake_sec.add_text(exhibit, (
+        "<p>Management's Discussion and Analysis</p><p>\u200bFebruary 25, 2026\u200b</p>"
+        "<p>This Management's Discussion and Analysis (MD&A) is in Canadian dollars. " + MDNA_BODY + "</p>"
+    ))
+    result = sec.load_40f(BANK_CIK, filing)
+    assert result["mdna"]["url"] == exhibit
+    assert "\u200b" not in result["mdna"]["text"]
+
+
+def test_40f_falls_back_to_the_next_candidate_exhibit(fake_sec):
+    filing = {"form": "40-F", "accession_number": BANK_ACCESSION, "primary_doc": "bank40f.htm"}
+    url = sec.archive_url(BANK_CIK, BANK_ACCESSION, filing["primary_doc"])
+    wrong = sec.archive_url(BANK_CIK, BANK_ACCESSION, "statements.htm")
+    exhibit = sec.archive_url(BANK_CIK, BANK_ACCESSION, "mdna.htm")
+    fake_sec.add_text(url, (
+        "<table><tr><td>99.3</td><td>Management's Discussion and Analysis</td></tr></table>"
+        "<p>Exhibit 99.2: Management's Discussion and Analysis is incorporated by reference.</p>"
+    ))
+    fake_sec.add_text(INDEX_URL, index_html([
+        ("Statements", "/Archives/edgar/data/19617/000001961726000044/statements.htm", "EX-99.3"),
+        ("MD&A", "/Archives/edgar/data/19617/000001961726000044/mdna.htm", "EX-99.2"),
+    ]))
+    fake_sec.add_text(wrong, "<p>Consolidated statements of income. " + MDNA_BODY + "</p>")
+    fake_sec.add_text(exhibit, "<p>Management's Discussion and Analysis This Management's Discussion and Analysis covers 2025. " + MDNA_BODY + "</p>")
+    assert sec.load_40f(BANK_CIK, filing)["mdna"]["url"] == exhibit
+
+
 TSMC_ITEM5_BODY = (
     "Net revenue increased 31.6% to NT$3,809.05 billion in 2025 from NT$2,894.31 billion in 2024. "
     "Gross margin was 59.9%, and capital expenditures were NT$1,269.9 billion (US$40.1 billion). "

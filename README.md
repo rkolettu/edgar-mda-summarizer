@@ -25,6 +25,20 @@ How the AI analysis is checked:
 
 These checks confirm that the quote appears in the source and that the numerical values appear somewhere in the filing or XBRL data. They do not prove a value belongs to the claimed metric or period, or that the AI used it in the right context. Review the original filings before using the output in an investment decision.
 
+## Research store (in progress)
+
+A new pipeline parses each filing once into Postgres (structured facts from the filing's inline XBRL, note sections,
+sources and coverage) so several research tabs can render without rereading filings or calling a model per view. See
+[docs/research-architecture.md](docs/research-architecture.md) for the design and phase plan.
+
+- `python -m research.ingest NVDA TSM` (from `backend/`, with `DATABASE_URL` and `SEC_USER_AGENT` set) parses a
+  company's recent filings; `--watchlist` ingests the showcase companies in `backend/research/watchlist.txt`. No model
+  calls.
+- `.github/workflows/ingest.yml` runs the watchlist daily once the `DATABASE_URL` and `SEC_USER_AGENT` repository
+  secrets are set.
+- `GET /api/research/{ticker}/filings` returns the stored filings, their coverage and headline facts.
+- `GEMINI_MODEL` overrides the Gemini model (Google now limits 2.5 models to projects that already use them).
+
 ## Tests
 
 ```bash

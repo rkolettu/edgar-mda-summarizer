@@ -21,11 +21,15 @@ import figures
 import financials
 import sec
 import verify
+from research import db as research_db
+from research import store as research_store
 
 # Filings never change once filed, so a finished analysis can be served from Vercel's CDN for a day;
 # a new filing shows up in the next response after that.
 SUMMARY_CACHE_CONTROL = "public, max-age=0, s-maxage=86400, stale-while-revalidate=86400"
 SEARCH_CACHE_CONTROL = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800"
+# Stored research changes when the scheduled ingest adds a filing, so the CDN copy stays short-lived.
+RESEARCH_CACHE_CONTROL = "public, max-age=0, s-maxage=300, stale-while-revalidate=3600"
 RESULT_CACHE_SIZE = 64
 
 app = FastAPI(title="item7-extractor")
@@ -326,6 +330,32 @@ def run_pipeline(query: str) -> tuple[dict, bool]:
         db_key = str(cache_key)
         cache.db_cache.put(db_key, response)
     return response, degraded
+
+
+@router.get("/research/{ticker}/filings")
+def research_filings(response: Response, ticker: str):
+    """Filings stored for a company with their coverage and headline facts (read-only; ingestion runs separately)."""
+    if not research_db.database_url():
+        raise HTTPException(status_code=503, detail="The research store is not configured.")
+    result = json_errors(load_research_filings, ticker)
+    response.headers["Cache-Control"] = RESEARCH_CACHE_CONTROL
+    return result
+
+
+def load_research_filings(query: str) -> dict:
+    with research_db.connect() as conn:
+        company = research_store.find_company(conn, ticker=query)
+        if company is None:
+            try:
+                company = research_store.find_company(conn, cik=sec.resolve_company(query)["cik"])
+            except HTTPException:
+                company = None
+        if company is None:
+            raise HTTPException(status_code=404, detail=f"No stored research for '{query}' yet.")
+        filings = research_store.company_filings(conn, company["company_id"])
+        latest = next((f for f in filings if not f["form_type"].endswith("/A")), None)
+        metrics = research_store.current_metrics(conn, latest["filing_id"]) if latest else []
+    return {"company": company, "filings": filings, "latest_metrics": metrics}
 
 
 @app.get("/")

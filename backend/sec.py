@@ -219,7 +219,8 @@ def html_to_text(html: str) -> str:
     for tag in soup(["script", "style", "head"]):
         tag.decompose()
     text = soup.get_text(separator=" ")
-    text = text.replace("\xa0", " ").replace("’", "'").replace("“", '"').replace("”", '"')
+    # Zero-width spaces are invisible in the filing but split words and headings for the regexes below.
+    text = text.replace("\xa0", " ").replace("\u200b", "").replace("’", "'").replace("“", '"').replace("”", '"')
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -421,14 +422,25 @@ def extract_20f_risk_factors(text: str) -> str | None:
     return item3[heading.start():heading.start() + RISK_FACTORS_CHARS]
 
 
+# The heading may carry its date first ("Management's Discussion and Analysis February 25, 2026 This MD&A ...").
 FORTYF_MDNA_START = re.compile(
-    r"management'?s\s+discussion\s+and\s+analysis\s+(?:this\s+management'?s\s+discussion\s+and\s+analysis|management'?s\s+discussion\s+and\s+analysis\s*\(md&a\)|about\s+[a-z]+)",
+    r"management'?s\s+discussion\s+and\s+analysis\s+(?:(?:dated\s+)?[A-Z][a-z]+\s+\d{1,2},\s+\d{4}\s+)?(?:this\s+management'?s\s+discussion\s+and\s+analysis|management'?s\s+discussion\s+and\s+analysis\s*\(md&a\)|about\s+[a-z]+)",
     re.IGNORECASE,
 )
 FORTYF_REFERENCE = re.compile(
     r"(?:exhibit\s+(99[.\-]\d+|2)\s*:\s*management'?s\s+discussion\s+and\s+analysis|management'?s\s+discussion\s+and\s+analysis.{0,140}?(?:exhibit\s+(99[.\-]\d+|2)))",
     re.IGNORECASE,
 )
+# The 40-F's exhibit index row ("99-3 Management's Discussion and Analysis ..."). Checked before prose references, which
+# can list several documents and exhibits in one sentence (Suncor: "AIF, ..., MD&A ... included as Exhibit 99-1, 99-2, 99-3").
+FORTYF_EXHIBIT_ROW = re.compile(r"\b(99[.\-]\d+)[\s\u200b|:.\-–—]*management'?s\s+discussion\s+and\s+analysis", re.IGNORECASE)
+
+
+def fortyf_mdna_exhibits(text: str) -> list[str]:
+    """Candidate MD&A exhibit types, most specific evidence first."""
+    numbers = [m.group(1) for m in FORTYF_EXHIBIT_ROW.finditer(text)]
+    numbers += [m.group(1) or m.group(2) for m in FORTYF_REFERENCE.finditer(text)]
+    return list(dict.fromkeys("EX-" + n.upper().replace("-", ".") for n in numbers))
 
 
 # 20-Fs that are a cross-reference index into an integrated annual report title the operating review as an annual
@@ -464,9 +476,9 @@ def extract_annual_report_review(text: str) -> str | None:
     return None
 
 
-def load_20f(cik: int, filing: dict) -> dict:
+def load_20f(cik: int, filing: dict, html: str | None = None) -> dict:
     document_url = archive_url(cik, filing["accession_number"], filing["primary_doc"])
-    text = html_to_text(sec_get(document_url).text)
+    text = html_to_text(html if html is not None else sec_get(document_url).text)
     mdna_url = document_url
     operating = extract_section(text, UBS_OPERATING_START, UBS_OPERATING_END)
     source = "operating_review"
@@ -508,20 +520,26 @@ def load_20f(cik: int, filing: dict) -> dict:
             "risk_factors": risks}
 
 
-def load_40f(cik: int, filing: dict) -> dict:
+def load_40f(cik: int, filing: dict, html: str | None = None) -> dict:
     document_url = archive_url(cik, filing["accession_number"], filing["primary_doc"])
-    text = html_to_text(sec_get(document_url).text)
-    reference = FORTYF_REFERENCE.search(text)
-    if not reference:
+    text = html_to_text(html if html is not None else sec_get(document_url).text)
+    candidates = fortyf_mdna_exhibits(text)
+    if not candidates:
         raise HTTPException(status_code=422, detail="Could not locate a management discussion exhibit in this 40-F.")
-    exhibit_type = "EX-" + (reference.group(1) or reference.group(2)).upper().replace("-", ".")
-    exhibit_url = find_exhibit(cik, filing["accession_number"], exhibit_type)
-    if not exhibit_url:
-        raise HTTPException(status_code=422, detail="The 40-F management discussion exhibit is unavailable.")
-    exhibit_text = html_to_text(sec_get(exhibit_url).text)
-    # The exhibit must itself identify as MD&A near the beginning; do not summarize financial statements.
-    start = FORTYF_MDNA_START.search(exhibit_text[:30_000])
-    if not start or len(exhibit_text) - start.start() < 5_000:
+    found_any = False
+    for exhibit_type in candidates:
+        exhibit_url = find_exhibit(cik, filing["accession_number"], exhibit_type)
+        if not exhibit_url:
+            continue
+        found_any = True
+        exhibit_text = html_to_text(sec_get(exhibit_url).text)
+        # The exhibit must itself identify as MD&A near the beginning; do not summarize financial statements.
+        start = FORTYF_MDNA_START.search(exhibit_text[:30_000])
+        if start and len(exhibit_text) - start.start() >= 5_000:
+            break
+    else:
+        if not found_any:
+            raise HTTPException(status_code=422, detail="The 40-F management discussion exhibit is unavailable.")
         raise HTTPException(status_code=422, detail="Could not verify the management discussion in this 40-F exhibit.")
     risks = None
     risk_match = re.search(r"Risk Factors that May Affect Future Results\s+", exhibit_text[10_000:], re.IGNORECASE)
@@ -557,9 +575,9 @@ def find_exhibit(cik: int, accession_number: str, exhibit_type: str) -> str | No
     return None
 
 
-def load_10k(cik: int, filing: dict) -> dict:
+def load_10k(cik: int, filing: dict, html: str | None = None) -> dict:
     document_url = archive_url(cik, filing["accession_number"], filing["primary_doc"])
-    text = html_to_text(sec_get(document_url).text)
+    text = html_to_text(html if html is not None else sec_get(document_url).text)
     return {
         **filing,
         "document_url": document_url,
@@ -568,9 +586,9 @@ def load_10k(cik: int, filing: dict) -> dict:
     }
 
 
-def load_10q(cik: int, filing: dict) -> dict:
+def load_10q(cik: int, filing: dict, html: str | None = None) -> dict:
     document_url = archive_url(cik, filing["accession_number"], filing["primary_doc"])
-    text = html_to_text(sec_get(document_url).text)
+    text = html_to_text(html if html is not None else sec_get(document_url).text)
     mdna = extract_section(text, TENQ_MDNA_START, TENQ_MDNA_END)
     if mdna is None:
         raise HTTPException(status_code=422, detail="Could not isolate Item 2 MD&A in the 10-Q.")

@@ -1,0 +1,10 @@
+# Showcase companies the scheduled ingest keeps current, one ticker per line. Their pages load from the database
+# instantly. They cover US GAAP 10-K/10-Q filers, a bank, IFRS and US GAAP 20-F filers, and a Canadian 40-F filer.
+NVDA
+AAPL
+MSFT
+AMZN
+JPM
+TSM
+ASML
+SU
