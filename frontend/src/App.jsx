@@ -138,6 +138,8 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [data, setData] = useState(null)
+  // Charts are in US dollars; hide them for filings reported in another (or an unverified) currency.
+  const chartsHidden = Boolean(data?.filing.currency) && data.filing.currency !== 'USD'
 
   async function runAnalysis(input) {
     const q = input.trim()
@@ -204,7 +206,7 @@ export default function App() {
               <p className="mb-1 text-[11px] font-semibold tracking-[0.14em] text-muted uppercase">Management commentary</p>
               <h2 className="text-2xl font-semibold tracking-[-0.04em] text-ink">Inside the filing</h2>
             </div>
-            <div className={data.filing.currency === 'CAD' || data.filing.currency === 'unknown' ? 'grid grid-cols-1 gap-5' : 'grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]'}>
+            <div className={chartsHidden ? 'grid grid-cols-1 gap-5' : 'grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]'}>
               <div className="space-y-5">
                 {SECTIONS.map((s) => (
                   <AnalysisSection
@@ -216,7 +218,7 @@ export default function App() {
                 ))}
                 {data.changes && <ChangesSection changes={data.changes} />}
               </div>
-              {data.filing.currency !== 'CAD' && data.filing.currency !== 'unknown' && <aside className="space-y-5">
+              {!chartsHidden && <aside className="space-y-5">
                 <RevenueMixChart data={data.charts?.revenue_segments ?? []} check={data.checks?.segments} />
                 <CapitalDeploymentChart
                   data={data.charts?.capital_deployment ?? []}

@@ -254,8 +254,9 @@ def run_pipeline(query: str) -> tuple[dict, bool]:
         warnings.extend(section.warnings)
     if current["form"] != "10-K":
         warnings.insert(0, "Financial trend cards are unavailable for this filing's XBRL taxonomy.")
-    if current.get("currency") == "CAD":
-        warnings.append("Charts are omitted because this filing reports Canadian dollars and chart data requires US dollars.")
+    if current.get("currency") in analysis.CURRENCY_NAMES:
+        name = analysis.CURRENCY_NAMES[current["currency"]][0]
+        warnings.append(f"Charts are omitted because this filing reports {name} and chart data requires US dollars.")
     elif current.get("currency") == "unknown":
         warnings.append("Charts are omitted because the filing's reporting currency could not be verified.")
 
@@ -266,7 +267,7 @@ def run_pipeline(query: str) -> tuple[dict, bool]:
     else:
         deployment = [{"name": p.name, "value": p.value * 1e9} for p in result.charts.capital_deployment]
         deployment_source = "gemini"
-    if current.get("currency") in ("CAD", "unknown"):
+    if current.get("currency") not in (None, "USD"):
         segments, deployment = [], []
 
     normalized_source = filing_source(current)

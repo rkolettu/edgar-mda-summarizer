@@ -8,7 +8,9 @@ import warnings
 from datetime import datetime
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+# Bump when the saved result shape or meaning changes; older rows are then ignored and recomputed.
+# 2: 20-F filings carry a detected reporting currency (non-USD charts omitted).
+SCHEMA_VERSION = 2
 # Vercel's deployment filesystem is read-only; /tmp is the only writable location there (per instance).
 CACHE_DB = Path(
     os.environ.get("CACHE_DB_PATH")

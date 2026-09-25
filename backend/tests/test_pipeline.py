@@ -63,6 +63,28 @@ def test_20f_pipeline_uses_annual_form_and_omits_10q(client, fake_sec, fake_gemi
     assert "BEGIN 20-F MANAGEMENT DISCUSSION" in fake_gemini.calls[0]["contents"]
 
 
+def test_non_usd_20f_labels_currency_and_omits_charts(client, fake_sec, fake_gemini, monkeypatch):
+    url = "https://data.sec.gov/submissions/CIK0000320193.json"
+    recent = fake_sec.routes[url][1]["filings"]["recent"]
+    for i, form in enumerate(recent["form"]):
+        if form == "10-K":
+            recent["form"][i] = "20-F"
+
+    def taiwan_loader(cik, filing):
+        loaded = sec.load_10k(cik, filing)
+        loaded["mdna"]["source"] = "item5"
+        loaded["currency"] = "TWD"
+        return loaded
+
+    monkeypatch.setattr(sec, "load_20f", taiwan_loader)
+    body = client.get("/api/summarize", params={"ticker": "AAPL"}).json()
+    assert body["filing"]["currency"] == "TWD"
+    assert body["charts"]["revenue_segments"] == [] and body["charts"]["capital_deployment"] == []
+    assert any("New Taiwan dollars" in w for w in body["warnings"])
+    summary_call = next(c for c in fake_gemini.calls if c["schema"] == "Analysis")
+    assert "Label monetary amounts NT$" in summary_call["contents"]
+
+
 def test_every_sec_request_sends_user_agent(client, fake_sec):
     client.get("/api/summarize", params={"ticker": "AAPL"})
     assert fake_sec.calls

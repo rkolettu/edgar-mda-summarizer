@@ -238,3 +238,68 @@ def test_40f_rejects_financial_statement_exhibit(fake_sec):
     fake_sec.add_text(exhibit, "<p>Consolidated statements of income. " + MDNA_BODY + "</p>")
     with pytest.raises(HTTPException, match="Could not verify"):
         sec.load_40f(BANK_CIK, filing)
+
+
+TSMC_ITEM5_BODY = (
+    "Net revenue increased 31.6% to NT$3,809.05 billion in 2025 from NT$2,894.31 billion in 2024. "
+    "Gross margin was 59.9%, and capital expenditures were NT$1,269.9 billion (US$40.1 billion). "
+) * 40
+
+
+def tsmc_style_20f(item5_heading="ITEM 5. OPERATING AND FINANCIAL REVIEWS AND PROSPECTS"):
+    return (
+        "<p>ITEM 3. KEY INFORMATION 3 ITEM 4. INFORMATION ON THE COMPANY 14 ITEM 4A. UNRESOLVED STAFF COMMENTS 26 "
+        "ITEM 5. OPERATING AND FINANCIAL REVIEWS AND PROSPECTS 26 ITEM 6. DIRECTORS, SENIOR MANAGEMENT AND EMPLOYEES 37</p>"
+        "<p>ITEM 3. KEY INFORMATION Capitalization and Indebtedness Not applicable. Risk Factors We wish to caution readers "
+        "about the following important factors. " + "Export controls could limit sales to certain customers. " * 60 +
+        'See "Item 5. Operating and Financial Reviews and Prospects – Taxation" for further discussion.</p>'
+        "<p>ITEM 4. INFORMATION ON THE COMPANY Our History and Structure. We manufacture semiconductors.</p>"
+        f"<p>ITEM 4A. UNRESOLVED STAFF COMMENTS None. {item5_heading} The following discussion covers 2025 and 2024. "
+        + TSMC_ITEM5_BODY + "</p><p>ITEM 6. DIRECTORS, SENIOR MANAGEMENT AND EMPLOYEES Directors.</p>"
+    )
+
+
+def load_20f_text(fake_sec, html):
+    filing = {"form": "20-F", "accession_number": "0001628280-26-025362", "primary_doc": "tsm-20251231.htm"}
+    fake_sec.add_text(sec.archive_url(1046179, filing["accession_number"], filing["primary_doc"]), html)
+    return sec.load_20f(1046179, filing)
+
+
+def test_20f_plural_reviews_heading_as_in_tsmc(fake_sec):
+    result = load_20f_text(fake_sec, tsmc_style_20f())
+    assert result["mdna"]["text"].startswith("ITEM 5. OPERATING AND FINANCIAL REVIEWS AND PROSPECTS The following")
+    assert "DIRECTORS" not in result["mdna"]["text"]
+    assert result["currency"] == "TWD"
+    assert result["risk_factors"].startswith("Risk Factors We wish to caution")
+    assert "Our History and Structure" not in result["risk_factors"]
+
+
+def test_20f_heading_with_words_split_by_markup(fake_sec):
+    result = load_20f_text(fake_sec, tsmc_style_20f("ITEM 5. OPERATING AND FINAN CIAL REVIEW AND PROSPECTS"))
+    assert "NT$3,809.05 billion" in result["mdna"]["text"]
+
+
+def test_quoted_section_reference_is_not_a_heading():
+    body = "Revenue grew on strong demand for oncology medicines. " * 60
+    text = text_of(
+        '<p>These statements are prepared under IFRS. "Item 5. Operating and Financial Review and Prospects," together with '
+        "the pipeline sections, discusses results. " + "Pipeline detail. " * 300 + "</p>"
+        "<p>Item 4A. Unresolved Staff Comments Not applicable. Item 5. Operating and Financial Review and Prospects You should "
+        "read the following discussion with our financial statements included at Item 18. of this annual report. " + body + "</p>"
+        "<p>Item 6. Directors, Senior Management and Employees</p>"
+    )
+    section = sec.extract_section(text, sec.TWENTYF_START, sec.TWENTYF_END)
+    assert section.startswith("Item 5. Operating and Financial Review and Prospects You should read")
+    assert "Pipeline detail" not in section
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Revenues were RMB134.5 billion (US$18.4 billion), up from RMB133.1 billion. " * 5, "CNY"),
+    ("Net revenue was NT$3,809.05 billion (US$120.4 billion) versus NT$2,894.31 billion. " * 5, "TWD"),
+    ("Revenue was $416.2 billion and Services revenue was $109.2 billion. " * 5, "USD"),
+    ("Sales in Europe grew 4% to €21.3 billion from €20.5 billion. " * 5, "EUR"),
+    ("Operating income was ¥4,795.6 billion. Europe and European markets were stable. " * 5, "JPY"),
+    ("Reference is made to the annual report. Sales of $1 were minor.", "unknown"),
+])
+def test_detect_currency(text, expected):
+    assert sec.detect_currency(text) == expected

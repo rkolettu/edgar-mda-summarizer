@@ -47,7 +47,7 @@ INLINE_MDNA_START = re.compile(
 # A heading reference inside prose ("see Item 8. Financial Statements", "discussed in Part II, Item 7. ...")
 # is not a section boundary.
 CROSS_REFERENCE = re.compile(
-    r"(?:\bsee|\bin|\bunder|\brefer\s+to|\bdescribed|\bdiscussed|\bincluded|\bset\s+forth|\bwithin|\bwith|\bto|\bfrom|\bof|\band|\bthis|\bour)"
+    r"(?:\bsee|\bin|\bat|\bunder|\brefer\s+to|\bdescribed|\bdiscussed|\bincluded|\bset\s+forth|\bwithin|\bwith|\bto|\bfrom|\bof|\band|\bthis|\bour)"
     r"[\s,]*(?:part\s+[iv]+[\s,.]*)?[\"“(']?\s*$",
     re.IGNORECASE,
 )
@@ -185,6 +185,11 @@ def is_cross_reference(text: str, index: int) -> bool:
     return bool(CROSS_REFERENCE.search(text[max(0, index - 40):index]))
 
 
+def is_quoted(text: str, index: int) -> bool:
+    # Headings are never in quotes; a quoted "Item 5. ..." is a reference to the section.
+    return text[max(0, index - 2):index].rstrip().endswith(('"', "'", "‘"))
+
+
 def is_toc_entry(text: str, end_of_heading: int) -> bool:
     # In a table of contents the next item heading follows within a few words (after a page number);
     # an intro sentence like "read with ... Part II, Item 8" is a cross-reference, not a TOC line.
@@ -198,7 +203,7 @@ def extract_section(text: str, start_re: re.Pattern, end_re: re.Pattern, min_cha
     # The table of contents also matches, so take the longest heading-to-heading span.
     best = ""
     for start in start_re.finditer(text):
-        if is_cross_reference(text, start.start()) or is_toc_entry(text, start.end()):
+        if is_quoted(text, start.start()) or is_cross_reference(text, start.start()) or is_toc_entry(text, start.end()):
             continue
         end = next((m for m in end_re.finditer(text, start.end()) if not is_cross_reference(text, m.start())), None)
         if not end:
@@ -229,8 +234,58 @@ UBS_OPERATING_END = re.compile(
     re.IGNORECASE,
 )
 UBS_RISK_START = re.compile(r"Risk factors\s+Certain risks,\s+including those described below", re.IGNORECASE)
-TWENTYF_START = re.compile(r"item\s*5\s*[.\-–—]?\s*operating\s+and\s+financial\s+review\s+and\s+prospects", re.IGNORECASE)
-TWENTYF_END = re.compile(r"item\s*6\s*[.\-–—]?\s*directors,?\s+senior\s+management", re.IGNORECASE)
+
+
+def spaced(phrase: str) -> str:
+    """A heading pattern that tolerates the stray spaces some filings put inside words ("FINAN CIAL")."""
+    return r"\s+".join(r"\s?".join(re.escape(ch) for ch in word) for word in phrase.split())
+
+
+TWENTYF_START = re.compile(
+    rf"i\s*t\s*e\s*m\s*5\s*[.\-–—]?\s*{spaced('operating and financial')}\s+{spaced('review')}\s?s?\s+{spaced('and prospects')}",
+    re.IGNORECASE,
+)
+TWENTYF_END = re.compile(rf"i\s*t\s*e\s*m\s*6\s*[.\-–—]?\s*{spaced('directors,')}?\s+{spaced('senior management')}", re.IGNORECASE)
+TWENTYF_ITEM3_START = re.compile(rf"i\s*t\s*e\s*m\s*3{SEP}key\s+information", re.IGNORECASE)
+TWENTYF_ITEM3_END = re.compile(rf"i\s*t\s*e\s*m\s*4{SEP}information\s+on\s+the\s+company", re.IGNORECASE)
+TWENTYF_RISK_HEADING = re.compile(r"\bRisk Factors\b|\bRISK FACTORS\b")
+
+# Reporting-currency markers. Bare "$" counts as US dollars only when no letter prefix (NT$, C$, HK$) precedes it.
+CURRENCY_PATTERNS = {
+    "USD": r"US\$|U\.S\.\s?dollars?|\bUSD(?![A-Za-z])|(?<![A-Za-z$])\$",
+    "TWD": r"NT\$|New Taiwan dollars?|\bNT dollars?|\bTWD(?![A-Za-z])",
+    "CAD": r"C\$|Canadian dollars?|\bCAD(?![A-Za-z])",
+    "EUR": r"€|\bEUR(?![A-Za-z])|\beuros?\b",
+    "GBP": r"£|\bGBP(?![A-Za-z])|pounds? sterling",
+    "JPY": r"¥|\bJPY(?![A-Za-z])|\byen\b",
+    "CNY": r"\bRMB(?![A-Za-z])|\bCNY(?![A-Za-z])|\bRenminbi\b",
+    "HKD": r"HK\$|\bHKD(?![A-Za-z])|Hong Kong dollars?",
+    "CHF": r"\bCHF(?![A-Za-z])|Swiss francs?",
+    "INR": r"₹|\bINR(?![A-Za-z])|\bRs\.|Indian rupees?",
+    "KRW": r"₩|\bKRW(?![A-Za-z])|Korean won",
+    "BRL": r"R\$|\bBRL(?![A-Za-z])|Brazilian reais|\breais\b",
+    "AUD": r"A\$|\bAUD(?![A-Za-z])|Australian dollars?",
+    "DKK": r"\bDKK(?![A-Za-z])|Danish kroner",
+}
+
+MIN_CURRENCY_MENTIONS = 5
+
+
+def detect_currency(text: str) -> str:
+    """The most frequently cited currency in a management discussion, or "unknown" when none is cited."""
+    counts = {code: len(re.findall(pattern, text, re.IGNORECASE if code != "USD" else 0)) for code, pattern in CURRENCY_PATTERNS.items()}
+    code, count = max(counts.items(), key=lambda item: item[1])
+    return code if count >= MIN_CURRENCY_MENTIONS else "unknown"
+
+
+def extract_20f_risk_factors(text: str) -> str | None:
+    item3 = extract_section(text, TWENTYF_ITEM3_START, TWENTYF_ITEM3_END)
+    heading = TWENTYF_RISK_HEADING.search(item3) if item3 else None
+    if not heading or len(item3) - heading.start() < MIN_SECTION_CHARS:
+        return None
+    return item3[heading.start():heading.start() + RISK_FACTORS_CHARS]
+
+
 FORTYF_MDNA_START = re.compile(
     r"management'?s\s+discussion\s+and\s+analysis\s+(?:this\s+management'?s\s+discussion\s+and\s+analysis|management'?s\s+discussion\s+and\s+analysis\s*\(md&a\)|about\s+[a-z]+)",
     re.IGNORECASE,
@@ -262,8 +317,11 @@ def load_20f(cik: int, filing: dict) -> dict:
         if operating_start and operating_start.start() > risk_start.start():
             risk_end = min(risk_end, operating_start.start())
         risks = text[risk_start.start():risk_end]
-    return {**filing, "document_url": document_url,
-            "mdna": {"text": operating[:FOREIGN_MDNA_CHARS], "source": source, "url": document_url},
+    else:
+        risks = extract_20f_risk_factors(text)
+    operating = operating[:FOREIGN_MDNA_CHARS]
+    return {**filing, "document_url": document_url, "currency": detect_currency(operating),
+            "mdna": {"text": operating, "source": source, "url": document_url},
             "risk_factors": risks}
 
 

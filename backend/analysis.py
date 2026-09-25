@@ -150,6 +150,24 @@ def with_reference(contents: str, reference: str | None) -> str:
     return f"{contents}\n\n{reference}" if reference else contents
 
 
+# Non-USD reporting currencies: (name, label Gemini should put on amounts).
+CURRENCY_NAMES = {
+    "CAD": ("Canadian dollars", "CAD"),
+    "TWD": ("New Taiwan dollars", "NT$"),
+    "EUR": ("euros", "€"),
+    "GBP": ("pounds sterling", "£"),
+    "JPY": ("Japanese yen", "¥"),
+    "CNY": ("Chinese renminbi", "RMB"),
+    "HKD": ("Hong Kong dollars", "HK$"),
+    "CHF": ("Swiss francs", "CHF"),
+    "INR": ("Indian rupees", "INR"),
+    "KRW": ("Korean won", "KRW"),
+    "BRL": ("Brazilian reais", "R$"),
+    "AUD": ("Australian dollars", "A$"),
+    "DKK": ("Danish kroner", "DKK"),
+}
+
+
 def summarize(company_name: str, ticker: str, mdna_text: str, risk_factors: str | None, reference: str | None = None, form: str = "10-K", currency: str | None = None) -> Analysis:
     label = "MD&A" if form == "10-K" else "MANAGEMENT DISCUSSION"
     risks_label = "ITEM 1A RISK FACTORS" if form == "10-K" else "RISK FACTORS"
@@ -159,8 +177,9 @@ def summarize(company_name: str, ticker: str, mdna_text: str, risk_factors: str 
     )
     if risk_factors:
         contents += f"\n\n--- BEGIN {form} {risks_label} ---\n{risk_factors}\n--- END {form} {risks_label} ---"
-    if currency == "CAD":
-        contents += "\n\nThe management discussion reports Canadian dollars. Label monetary amounts CAD in the insights; return empty chart arrays because the chart schema requires USD."
+    if currency in CURRENCY_NAMES:
+        name, label = CURRENCY_NAMES[currency]
+        contents += f"\n\nThe management discussion reports {name}. Label monetary amounts {label} in the insights; return empty chart arrays because the chart schema requires USD."
     elif currency == "unknown":
         contents += "\n\nThe filing's reporting currency could not be verified. Keep monetary units explicit in insights and return empty chart arrays."
     return generate(SYSTEM_PROMPT, with_reference(contents, reference), Analysis)
