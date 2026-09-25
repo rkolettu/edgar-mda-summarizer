@@ -1,3 +1,4 @@
+import { Analytics } from '@vercel/analytics/react'
 import { ArrowUpRight, ExternalLink, Info, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
 import AnalysisSection from './components/AnalysisSection'
@@ -234,6 +235,7 @@ export default function App() {
         <span>Source: SEC EDGAR · Analysis: Gemini 2.5 Flash</span>
         <span>Research aid only. Review the original filing before making investment decisions.</span>
       </footer>
+      <Analytics />
     </div>
   )
 }
