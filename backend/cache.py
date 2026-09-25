@@ -1,11 +1,18 @@
+from __future__ import annotations
+
 import json
+import os
 import sqlite3
 import threading
 from datetime import datetime
 from pathlib import Path
 
 SCHEMA_VERSION = 1
-CACHE_DB = Path(__file__).parent.parent / "data" / "cache.db"
+# Vercel's deployment filesystem is read-only; /tmp is the only writable location there (per instance).
+CACHE_DB = Path(
+    os.environ.get("CACHE_DB_PATH")
+    or ("/tmp/edgar-cache.db" if os.environ.get("VERCEL") else Path(__file__).parent.parent / "data" / "cache.db")
+)
 
 
 class DatabaseCache:
@@ -13,12 +20,12 @@ class DatabaseCache:
 
     def __init__(self, db_path: Path = CACHE_DB):
         self.db_path = db_path
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._init_schema()
 
     def _init_schema(self):
         try:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
             with sqlite3.connect(self.db_path) as conn:
                 conn.execute(
                     """

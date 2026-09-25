@@ -207,6 +207,13 @@ def default_analysis():
 
 
 @pytest.fixture(autouse=True)
+def isolated_persistent_cache(tmp_path, monkeypatch):
+    import cache
+
+    monkeypatch.setattr(main.cache, "db_cache", cache.DatabaseCache(tmp_path / "cache.db"))
+
+
+@pytest.fixture(autouse=True)
 def clear_result_cache(monkeypatch):
     monkeypatch.setenv("SEC_USER_AGENT", "Test Research (test@example.com)")
     main.RESULT_CACHE.clear()
