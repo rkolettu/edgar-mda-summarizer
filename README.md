@@ -12,7 +12,7 @@ Pulls the latest annual 10-K, 20-F, or 40-F for a ticker from SEC EDGAR, isolate
 - Revenue segments reconciled against reported revenue, and capital deployment from the cash flow statement
 - What changed versus the prior year's filing of the same form, when available
 - For 10-Ks, a latest-quarter update from the most recent 10-Q filed after the 10-K
-- Results cached per filing set in memory and at Vercel's CDN (`s-maxage=86400`)
+- Every completed analysis saved to Postgres when `DATABASE_URL` is set (SQLite otherwise), so repeat searches for a filing skip Gemini; `/api/cache/stats` shows how many companies are stored
 
 Foreign issuer filing layouts vary. The app recognizes embedded operating reviews in 20-Fs and referenced management discussion exhibits in 40-Fs; when it cannot verify the section, it returns an error rather than summarizing unrelated material. XBRL trend cards are currently limited to 10-Ks, and Canadian-dollar charts are omitted because their schema assumes US dollars. This app does not yet analyze foreign issuers' 6-K interim filings.
 

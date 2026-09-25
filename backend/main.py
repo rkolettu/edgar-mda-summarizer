@@ -3,13 +3,16 @@ from __future__ import annotations
 from dotenv import load_dotenv
 load_dotenv()
 
+import hmac
+import os
 import threading
 from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Optional
 
-from fastapi import APIRouter, FastAPI, HTTPException, Query, Response
+from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 import analysis
@@ -332,8 +335,11 @@ def cache_stats():
 
 
 @router.post("/cache/clear")
-def cache_clear():
-    """Clear all caches. For ops/debugging only."""
+def cache_clear(x_admin_token: Optional[str] = Header(default=None)):
+    """Clear all caches. Disabled unless CACHE_ADMIN_TOKEN is set; the request must send it as X-Admin-Token."""
+    expected = os.environ.get("CACHE_ADMIN_TOKEN")
+    if not expected or not x_admin_token or not hmac.compare_digest(x_admin_token, expected):
+        raise HTTPException(status_code=403, detail="Clearing the cache requires the admin token.")
     RESULT_CACHE.clear()
     cache.db_cache.clear()
     return {"status": "cleared"}

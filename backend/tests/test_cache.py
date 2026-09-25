@@ -40,3 +40,11 @@ def test_repeat_search_served_from_persistent_cache(client, fake_sec, fake_gemin
     body = client.get("/api/summarize", params={"ticker": "AAPL"}).json()
     assert body["ticker"] == "AAPL"
     assert len(fake_gemini.calls) == calls
+
+
+def test_cache_clear_requires_admin_token(client, monkeypatch):
+    assert client.post("/api/cache/clear").status_code == 403
+    monkeypatch.setenv("CACHE_ADMIN_TOKEN", "s3cret")
+    assert client.post("/api/cache/clear").status_code == 403
+    assert client.post("/api/cache/clear", headers={"X-Admin-Token": "wrong"}).status_code == 403
+    assert client.post("/api/cache/clear", headers={"X-Admin-Token": "s3cret"}).json() == {"status": "cleared"}
