@@ -24,7 +24,8 @@ from research.ixbrl import Fact, IxbrlFiling, Period, local_name
 # 4: narrative sections keep paragraphs as lines; business sections (10-K Item 1, 20-F Item 4).
 # 5: foreign issuers' sections (20-F cross-reference tables, 40-F document sets), bank lines, IFRS fallbacks.
 # 6: joint filings' documents are read once (a co-registrant's link to the same file was parsed again).
-PARSER_VERSION = 6
+# 7: banks' own tags for credit losses, net loans and buybacks (TD).
+PARSER_VERSION = 7
 
 ANNUAL_FORMS = {"10-K", "10-KT", "20-F", "40-F"}
 YEAR_DAYS = 365.25

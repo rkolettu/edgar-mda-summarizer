@@ -341,6 +341,9 @@ def table(m: Metrics, kind: str, bank: bool = False) -> dict:
     return {"columns": [{"fiscal_year": fy, "fiscal_period": period} for fy, period in columns], "rows": rows}
 
 
+OTHER_ITEMS_SHARE = 0.005
+
+
 def bank_bridge(m: Metrics, fiscal_year: int, period: str) -> dict | None:
     """Revenue to net income for a bank: credit losses and operating expenses, then tax."""
     get = lambda metric: m.get(metric, fiscal_year, period)  # noqa: E731
@@ -349,9 +352,16 @@ def bank_bridge(m: Metrics, fiscal_year: int, period: str) -> dict | None:
         return None
     values = {k: get(k) for k in ("net_interest_income", "fee_income", "noninterest_income", "credit_loss_expense",
                                   "operating_expenses", "pretax_income", "income_tax")}
+    # What the statement shows between expenses and pretax income beyond credit losses: insurance claims (TD, RBC),
+    # the share of associates' profit, other items. Shown when it is more than rounding.
+    other = None
+    if values["pretax_income"] and values["operating_expenses"]:
+        residual = values["pretax_income"].value - (revenue.value - values["operating_expenses"].value
+                                                    - (values["credit_loss_expense"].value if values["credit_loss_expense"] else 0))
+        other = residual if abs(residual) > OTHER_ITEMS_SHARE * abs(revenue.value) else None
     return {
         "kind": "bank", "fiscal_year": fiscal_year, "fiscal_period": period, "revenue": revenue.value,
-        **{k: v.value if v else None for k, v in values.items()}, "net_income": net.value,
+        **{k: v.value if v else None for k, v in values.items()}, "other_items": other, "net_income": net.value,
         "cost_income_ratio": values["operating_expenses"].value / revenue.value
         if values["operating_expenses"] and revenue.value else None,
     }

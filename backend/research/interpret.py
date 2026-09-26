@@ -391,7 +391,9 @@ def synthesis_input(payload: dict, extractions: list[tuple[dict, dict]]) -> Synt
             parts = [f"{name} {_money(bridge[key], currency)}" for key, name in (
                 ("revenue", "total revenues"), ("net_interest_income", "net interest income"),
                 ("fee_income", "net fee and commission income"), ("credit_loss_expense", "credit loss expense"),
-                ("operating_expenses", "operating expenses"), ("pretax_income", "pretax"), ("income_tax", "tax"),
+                ("operating_expenses", "operating expenses"), ("other_items", "other items before tax (insurance claims, "
+                                                                               "associates, other)"),
+                ("pretax_income", "pretax"), ("income_tax", "tax"),
                 ("net_income", "net income")) if bridge.get(key) is not None]
             if bridge.get("cost_income_ratio") is not None:
                 parts.append(f"cost/income ratio {bridge['cost_income_ratio'] * 100:.1f}%")

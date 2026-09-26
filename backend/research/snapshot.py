@@ -16,7 +16,7 @@ from research.extract import PARSER_VERSION
 from research.rows import fiscal_label, latest_by, reported_label, source
 
 # Bump when the payload's shape or meaning changes; stored snapshots at an older version are rebuilt on read.
-SNAPSHOT_VERSION = 5
+SNAPSHOT_VERSION = 6
 
 CAPITAL_SECTIONS = [
     ("commitment", "Commitments"),
@@ -69,8 +69,11 @@ def _item(rows: list[dict], context: dict) -> dict | None:
         latest = points[-1]
         same_length = points
     else:
-        # Flows compare like-for-like: the longest year-to-date span at the latest date, against a year earlier.
-        by_span = latest_by(rows, lambda r: (r["period_start"], r["period_end"]))
+        # Flows compare like-for-like: the longest year-to-date span at the latest date, against a year earlier. A span
+        # that is no fiscal period (TD's buybacks "since the program began on January 20") is used only when nothing
+        # else is reported.
+        fiscal = [r for r in rows if r["fiscal_period"] is not None]
+        by_span = latest_by(fiscal or rows, lambda r: (r["period_start"], r["period_end"]))
         latest_end = max(end for _, end in by_span)
         latest = max((r for (_, end), r in by_span.items() if end == latest_end), key=lambda r: r["period_months"] or 0)
         same_length = sorted((r for r in by_span.values() if r["period_months"] == latest["period_months"]),

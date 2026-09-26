@@ -17,6 +17,7 @@ const BANK_BRIDGE_ROWS = [
   ['fee_income', 'of which net fee and commission income'],
   ['credit_loss_expense', 'Credit loss expense'],
   ['operating_expenses', 'Operating expenses'],
+  ['other_items', 'Other items before tax'],
   ['pretax_income', 'Income before taxes'],
   ['income_tax', 'Income tax'],
   ['net_income', 'Net income'],
@@ -42,6 +43,8 @@ function Bridge({ bridge, currency }) {
       {bank && bridge.cost_income_ratio != null && (
         <p className="border-t border-line px-5 py-3 text-xs text-ink-2 sm:px-6">
           Operating expenses are {formatPct(bridge.cost_income_ratio)} of total revenues (the cost/income ratio).
+          {bridge.other_items != null &&
+            ' Other items before tax is the rest of the way to income before taxes: insurance claims, the share of associates\' profit and similar lines.'}
         </p>
       )}
       {bridge.non_operating_share_of_pretax != null && (

@@ -407,6 +407,15 @@ Live runs on NVIDIA (10-Q), Microsoft (10-K), TSMC (20-F) and Suncor (40-F), wit
 - A half-year report is tagged as Q2; its filing, balances and six-month figures are labelled H1 like its columns. A
   6-K has no risk factors, so for a company whose latest filing is one, the Risks tab compares the last two annual
   reports' risk factors instead.
+- TD tags its own names for three bank lines: the provision for credit losses as the allowance's charge to profit
+  or loss, "Total loans, net of allowance" as `td:LoansNet`, and buybacks as shares repurchased for cancellation;
+  HSBC its expected credit losses as loan impairment charges. All four are mapped (parser version 7). Credit
+  losses keep their sign, since a net release (HSBC's 2021) is a gain. RBC tags each segment with IFRS's
+  operating-segments member beside it, which hid every segment until that member was treated as neutral. A bank's
+  bridge shows "other items before tax" when revenue less credit losses and expenses misses pretax income by more
+  than 0.5% of revenue (TD's C$6.1B of insurance claims, HSBC's share of associates). TD's quarterly MD&A ends with
+  a glossary whose definitions read as new language; the MD&A now stops at it, and comparatives "restated to
+  conform" to a new presentation no longer count as a restatement.
 - The frontend and the API come from the same deployment; a tab left open across a deploy read the new data with
   the old code (bank rows in a non-bank layout). The API now sends the commit it runs as `X-App-Build`, and a page
   built from a different commit reloads once.

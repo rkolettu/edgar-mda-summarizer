@@ -145,3 +145,14 @@ def test_half_year_reporters_get_half_year_columns():
     quarterly = metrics.Metrics(spans("revenue", 2026, Q1=10, Q2=12))
     quarterly.set_interim([{"form_type": "6-K", "is_annual": False, "fiscal_period": "Q1", "period_months": 3}])
     assert quarterly.interim_kind() == "quarterly"
+
+
+def test_bank_bridge_shows_what_lies_between_expenses_and_pretax_income():
+    """TD books insurance claims between its expenses and pretax income; the bridge shows them as other items."""
+    rows = spans("revenue", 2025, FY=67.777) + spans("net_income", 2025, FY=19.973) + spans("credit_loss_expense", 2025, FY=4.506)
+    rows += spans("operating_expenses", 2025, FY=33.539) + spans("pretax_income", 2025, FY=23.643)
+    bridge = metrics.bank_bridge(metrics.Metrics(rows), 2025, "FY")
+    assert bridge["other_items"] == pytest.approx(23.643 - (67.777 - 4.506 - 33.539))
+    rows = spans("revenue", 2025, FY=66.61) + spans("net_income", 2025, FY=20.36) + spans("credit_loss_expense", 2025, FY=4.36)
+    rows += spans("operating_expenses", 2025, FY=36.59) + spans("pretax_income", 2025, FY=25.66)
+    assert metrics.bank_bridge(metrics.Metrics(rows), 2025, "FY")["other_items"] is None  # rounding only

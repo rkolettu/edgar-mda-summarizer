@@ -155,6 +155,8 @@ def test_ambiguous_company_specific_tags_are_left_unmapped():
         ("ifrs-full:DescriptionOfAccountingPolicyForLeasesExplanatory", ("accounting_policies",), "policy"),
         ("asml:InventoryValuationProvisionTableTableTextBlock", ("inventory",), "table"),
         ("acme:SomethingNewTextBlock", ("other",), "disclosure"),
+        ("td:DisclosureOfProvisionsContingentLiabilitiesCommitmentsGuaranteesPledgedAssetsAndCollateralExplanatory",
+         ("contingencies", "commitments", "guarantees"), "disclosure"),
     ],
 )
 def test_text_block_categories(concept, categories, kind):
@@ -238,6 +240,13 @@ def test_bank_lines_outflows_and_company_specific_pretax():
               value("acme:ProfitLossBeforeTaxAndEquityInNetIncomeOfInvestmentInAssociates", "fy", "24,905"))
         + row("Net expenditures on premises", value("acme:NetExpendituresOnPremises", "fy", "(912)", sign="-"))
         + row("Deposits", value("acme:DepositsOtherThanTrading", "fyend", "1,267,104"))
+        # TD's own names: its provision as the allowance's charge to profit, net loans, shares bought back to cancel.
+        + row("Provision for credit losses",
+              value("acme:AdditionalAllowanceRecognisedInRecoveredFromProfitOrLossAllowanceAccountForCreditLossesOfFinancialAsset",
+                    "fy", "4,506"))
+        + row("Total loans, net of allowance", value("acme:LoansNet", "fyend", "953,012"))
+        + row("Total loans", value("acme:LoansBeforeAllowanceForLoanLosses", "fyend", "961,701"))
+        + row("Repurchase of common shares", value("acme:PaymentForCommonSharesRepurchasedForCancellation", "fy", "(6,206)", sign="-"))
     )
     filing = parse(document(body, [context("fy", "2024-11-01", "2025-10-31"), context("fyend", instant="2025-10-31")]))
     extraction = extract.extract(filing, "40-F")
@@ -245,6 +254,9 @@ def test_bank_lines_outflows_and_company_specific_pretax():
     assert metrics(extraction, "operating_expenses")[(2025, "FY")].xbrl_concept == "acme:NonInterestExpense1"
     assert metrics(extraction, "pretax_income")[(2025, "FY")].value_normalized == 24_905e6
     assert metrics(extraction, "deposits")[(2025, "FY")].value_normalized == 1_267_104e6
+    assert metrics(extraction, "credit_loss_expense")[(2025, "FY")].value_normalized == 4_506e6
+    assert metrics(extraction, "loans")[(2025, "FY")].value_normalized == 953_012e6
+    assert metrics(extraction, "buybacks")[(2025, "FY")].value_normalized == 6_206e6
 
 
 def test_outflows_are_positive_whatever_the_tagged_sign():
@@ -257,3 +269,23 @@ def test_outflows_are_positive_whatever_the_tagged_sign():
     extraction = extract.extract(parse(document(body, [context("fy", "2025-01-01", "2025-12-31")])), "40-F")
     capex = metrics(extraction, "capex")[(2025, "FY")]
     assert (capex.value_normalized, capex.value_reported) == (6_676e6, -6_676)
+
+
+def test_member_labels_keep_acronyms_written_in_title_case():
+    assert concepts.humanize("td:UsRetailMember") == "US retail"
+    assert concepts.humanize("ubs:Emea1Member") == "EMEA 1"
+    assert concepts.humanize("acme:AmountsDueToUsMember") == "Amounts due to us"
+
+
+def test_ifrs_operating_segments_member_does_not_hide_a_segment():
+    """RBC tags each segment's revenue with SegmentConsolidationItemsAxis=OperatingSegmentsMember alongside it."""
+    body = (
+        cover("fy", "40-F", "October 31, 2025", 2025, "FY", fiscal_year_end="--10-31")
+        + row("Total revenue", value("ifrs-full:Revenue", "fy", "66,610"))
+        + row("Wealth Management", value("ifrs-full:Revenue", "wm", "22,380"))
+    )
+    wm = [("ifrs-full:SegmentConsolidationItemsAxis", "ifrs-full:OperatingSegmentsMember"),
+          ("ifrs-full:SegmentsAxis", "ry:WealthManagementMember")]
+    filing = parse(document(body, [context("fy", "2024-11-01", "2025-10-31"), context("wm", "2024-11-01", "2025-10-31", dims=wm)]))
+    segments = [f for f in extract.extract(filing, "40-F").facts if f.category == "segment"]
+    assert [(f.label, f.value_normalized) for f in segments] == [("Wealth management", 22_380e6)]

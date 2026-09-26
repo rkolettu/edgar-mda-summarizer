@@ -372,3 +372,11 @@ def test_annual_risk_changes_compare_the_last_two_annual_reports():
     records = changes.annual_risk_changes([], sections, FOREIGN, metrics.Metrics([]), "USD")
     assert [(r.change_type, r.text) for r in records] == [("new", ADDED_RISK)]
     assert records[0].period_label == "FY2025" and records[0].base_period_label == "FY2024"
+
+
+def test_comparatives_restated_for_presentation_are_not_a_restatement():
+    assert narrative.triggers("Effective the first quarter of 2026, comparative amounts have been restated for alignment "
+                              "with the presentation adopted in the current period.") == []
+    assert narrative.triggers("The comparative period balance has been restated to conform with this change.") == []
+    assert narrative.triggers("The Company restated its previously issued financial statements to correct errors in "
+                              "revenue recognition.")[0]["phrase"] == "restatement"

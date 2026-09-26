@@ -425,12 +425,23 @@ def _part(text: str, marks: list[tuple[int, str]], kind: str) -> str | None:
     return best if len(best) >= MIN_PART_CHARS else None
 
 
+# The glossary of terms a bank puts after its MD&A (TD's quarterly reports): definitions, not discussion. A heading in
+# the first half is a contents entry.
+GLOSSARY_HEADING = re.compile(r"^[ \t]*glossary(?:[ \t]+of[ \t]+terms)?[ \t]*$", re.IGNORECASE | re.MULTILINE)
+
+
+def _without_glossary(text: str) -> str:
+    found = next((m.start() for m in GLOSSARY_HEADING.finditer(text) if m.start() >= len(text) // 2), None)
+    return text[:found] if found is not None else text
+
+
 def document_parts(documents: list[Document]) -> Parts:
     parts = Parts(other=[])
     for doc in documents:
         lines = _lines(doc.text)
         marks = _boundaries(doc.text, lines)
         mdna, aif = _part(doc.text, marks, "mdna"), _part(doc.text, marks, "aif")
+        mdna = _without_glossary(mdna) if mdna else None
         if mdna and (parts.mdna is None or len(mdna) > len(parts.mdna[1])):
             parts.mdna = (doc.url, mdna)
         if aif and (parts.aif is None or len(aif) > len(parts.aif[1])):
