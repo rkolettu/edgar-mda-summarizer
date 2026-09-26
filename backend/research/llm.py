@@ -66,7 +66,9 @@ def _kind(exc: Exception) -> str:
         return "malformed output"
     code = getattr(exc, "code", None)
     message = str(exc).lower()
-    if code in (403, 404, 500, 503) or any(marker in message for marker in UNAVAILABLE_MARKERS):
+    if code == 429:
+        return "quota"
+    if code in (400, 403, 404, 500, 502, 503) or any(marker in message for marker in UNAVAILABLE_MARKERS):
         return "unavailable"
     return "error"
 
@@ -140,6 +142,76 @@ def generate(stage: str, system: str, contents: str, schema: type[BaseModel]) ->
         raise ModelUnavailable("No model is configured (set GEMINI_API_KEY).", quota=False)
     summary = "; ".join(f"{model}: {kind}" for model, kind in failures)
     raise ModelUnavailable(summary, quota=all(kind == "quota" for _, kind in failures))
+
+
+# --- conversational replies (the filing chat) ---
+
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODELS = ("openai/gpt-oss-120b", "llama-3.3-70b-versatile")
+REPLY_TIMEOUT = 60
+REPLY_TOKENS = 1_200
+
+
+@dataclass
+class Reply:
+    text: str
+    model: str
+    input_tokens: int | None
+    output_tokens: int | None
+
+
+class ProviderError(Exception):
+    def __init__(self, code: int, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def chat_configured() -> bool:
+    # The chat never uses Gemini, whose free quota is kept for the filing analysis.
+    return bool(os.environ.get("GROQ_API_KEY") or os.environ.get("MISTRAL_API_KEY"))
+
+
+def _openai_chat(url: str, key: str, model: str, system: str, prompt: str) -> Reply:
+    """OpenAI-compatible chat completion (Groq, Mistral)."""
+    body = {"model": model, "temperature": 0.2, "max_completion_tokens": REPLY_TOKENS,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}]}
+    if model.startswith("openai/gpt-oss"):
+        body["reasoning_effort"] = "low"  # counts toward the free tier's tokens per minute; answers need little
+    if "mistral.ai" in url:
+        body["max_tokens"] = body.pop("max_completion_tokens")
+    response = requests.post(url, headers={"Authorization": f"Bearer {key}"}, json=body, timeout=REPLY_TIMEOUT)
+    if response.status_code >= 400:
+        raise ProviderError(response.status_code, f"{response.status_code}: {response.text[:300]}")
+    data = response.json()
+    usage = data.get("usage") or {}
+    text = (data["choices"][0]["message"].get("content") or "").strip()
+    if not text:
+        raise ProviderError(502, "empty reply")
+    return Reply(text, model, usage.get("prompt_tokens"), usage.get("completion_tokens"))
+
+
+def reply(system: str, prompt: str) -> Reply:
+    """A conversational answer: Groq's free tier first (fast), then Mistral's. Gemini is left to the analysis."""
+    attempts = []
+    if os.environ.get("GROQ_API_KEY"):
+        for model in dict.fromkeys([os.environ.get("GROQ_MODEL") or GROQ_MODELS[0], *GROQ_MODELS]):
+            attempts.append((f"groq:{model}", lambda m=model: _openai_chat(GROQ_URL, os.environ["GROQ_API_KEY"], m, system, prompt)))
+    if os.environ.get("MISTRAL_API_KEY"):
+        model = os.environ.get("MISTRAL_MODEL", "mistral-small-latest")
+        attempts.append((f"mistral:{model}", lambda: _openai_chat(MISTRAL_URL, os.environ["MISTRAL_API_KEY"], model, system, prompt)))
+    if not attempts:
+        raise ModelUnavailable("No chat model is configured (set GROQ_API_KEY or MISTRAL_API_KEY).", quota=False)
+    failures = []
+    for name, call in attempts:
+        try:
+            result = call()
+        except Exception as exc:  # noqa: BLE001 - every failure moves to the next model
+            failures.append(_kind(exc))
+            print(f"chat model {name} failed: {_kind(exc)}: {str(exc)[:200]}", flush=True)
+            continue
+        print(f"chat model={result.model} input={result.input_tokens} output={result.output_tokens}", flush=True)
+        return result
+    raise ModelUnavailable("; ".join(f"{n}: {k}" for (n, _), k in zip(attempts, failures)), quota=all(k == "quota" for k in failures))
 
 
 def _log(stage: str, schema: type[BaseModel], result: Result) -> None:

@@ -8,6 +8,7 @@ import CapitalTab from './components/CapitalTab'
 import ChangesSection from './components/ChangesSection'
 import EarningsTab from './components/EarningsTab'
 import FilingChangesTab from './components/FilingChangesTab'
+import FilingChat from './components/FilingChat'
 import FinancialsTab from './components/FinancialsTab'
 import KpiStrip from './components/KpiStrip'
 import LatestQuarter from './components/LatestQuarter'
@@ -42,6 +43,7 @@ const TABS = [
 ]
 
 const RESEARCH_LOADING = "A company's first visit parses its recent annual and quarterly reports from SEC EDGAR, which can take up to a minute; later visits load from the database."
+const INSIGHTS_LOADING = "Writing the AI analysis from the stored filings. A company's first visit takes about one to two minutes; later visits load instantly."
 
 const SECTIONS = [
   { key: 'revenue_drivers', title: 'Revenue drivers' },
@@ -245,8 +247,10 @@ export default function App() {
   const latestRequest = useRef(0)
 
   const researchReady = research.status === 'ready'
-  const loading = research.status === 'loading' || (!researchReady && summary.status === 'loading')
-  const showPage = researchReady || summary.status === 'ready'
+  // The page appears once everything it will show is ready, the AI analysis included (or known to be unavailable).
+  const writingInsights = researchReady && insightsRequest.status === 'loading'
+  const loading = research.status === 'loading' || writingInsights || (!researchReady && summary.status === 'loading')
+  const showPage = (researchReady && !writingInsights) || summary.status === 'ready'
   const failed = !showPage && !loading && summary.status === 'error'
   const idle = research.status === 'idle' && summary.status === 'idle'
   const header = headerFor(summary, research)
@@ -311,7 +315,12 @@ export default function App() {
       <SearchHeader query={query} onQueryChange={setQuery} onSubmit={runAnalysis} loading={loading} />
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-10 sm:px-8 sm:py-12">
-        {loading && <LoadingState ticker={activeQuery} message={research.status === 'loading' ? RESEARCH_LOADING : undefined} />}
+        {loading && (
+          <LoadingState
+            ticker={activeQuery}
+            message={research.status === 'loading' ? RESEARCH_LOADING : writingInsights ? INSIGHTS_LOADING : undefined}
+          />
+        )}
 
         {failed && <FailureAlert query={activeQuery} message={summary.error} />}
 
@@ -330,6 +339,7 @@ export default function App() {
                 <TabPanel tabKey="risks" active={tab}><RisksTab {...tabProps} /></TabPanel>
                 <TabPanel tabKey="earnings" active={tab}><EarningsTab {...tabProps} /></TabPanel>
                 <TabPanel tabKey="changes" active={tab}><FilingChangesTab research={research.data} /></TabPanel>
+                {research.data.chat?.configured && <FilingChat key={research.data.company.ticker} research={research.data} />}
               </>
             ) : (
               <OverviewPanel summary={summary} />

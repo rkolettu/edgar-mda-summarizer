@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
 
 import sec
-from research import db, extract, ingest, interpret, llm, snapshot, store
+from research import chat, db, extract, ingest, interpret, llm, snapshot, store
 
 # EDGAR is checked for newer filings at most this often per company; showcase companies are refreshed daily by
 # the scheduled ingest, so their pages never wait on SEC.
@@ -53,6 +53,7 @@ def _served(payload: dict) -> dict:
     insights = payload.get("insights")
     if insights is not None:
         insights["configured"] = llm.configured()
+    payload["chat"] = {"configured": llm.chat_configured()}
     return payload
 
 
@@ -121,3 +122,25 @@ def generate_insights(query: str) -> dict:
         if stored is None or stored["snapshot_version"] != snapshot.SNAPSHOT_VERSION:
             return _served(snapshot.rebuild(conn, company_id))
         return _served(stored["payload"])
+
+
+CHAT_QUOTA_MESSAGE = "The chat's free AI quota is used up for the moment; try again in a minute."
+
+
+def ask(query: str, question: str, history: list[dict]) -> dict:
+    """Answers a question about a stored company's filings."""
+    if not llm.chat_configured():
+        raise HTTPException(status_code=503, detail="The filing chat is not configured on this server.")
+    with db.connect() as conn:
+        company, _ = _resolve(conn, query)
+        stored = store.load_snapshot(conn, company["company_id"]) if company else None
+        if stored is None:
+            raise HTTPException(status_code=404, detail="Load the company's research before asking about it.")
+        try:
+            return chat.answer(conn, company["company_id"], question, history, stored["payload"])
+        except chat.InvalidQuestion as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except llm.ModelUnavailable as exc:
+            if exc.quota:
+                raise HTTPException(status_code=429, detail=CHAT_QUOTA_MESSAGE) from exc
+            raise HTTPException(status_code=503, detail=f"The filing chat is unavailable ({exc}).") from exc

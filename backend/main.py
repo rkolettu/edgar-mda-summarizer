@@ -6,14 +6,16 @@ load_dotenv()
 import hmac
 import os
 import threading
+import time
 from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Response
+from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 import analysis
 import cache
@@ -349,6 +351,46 @@ def research_insights(ticker: str):
     if not research_db.database_url():
         raise HTTPException(status_code=503, detail="The research store is not configured.")
     return json_errors(research_service.generate_insights, ticker)
+
+
+class ChatTurn(BaseModel):
+    role: str
+    content: str
+
+
+class ChatRequest(BaseModel):
+    question: str
+    history: list[ChatTurn] = []
+
+
+# Questions per visitor per minute, per server instance; the providers' own quotas are the backstop.
+CHAT_PER_MINUTE = 10
+_chat_times: dict[str, list[float]] = {}
+_chat_lock = threading.Lock()
+
+
+def _chat_allowed(visitor: str) -> bool:
+    now = time.monotonic()
+    with _chat_lock:
+        recent = [t for t in _chat_times.get(visitor, []) if now - t < 60]
+        allowed = len(recent) < CHAT_PER_MINUTE
+        if allowed:
+            recent.append(now)
+        _chat_times[visitor] = recent
+        if len(_chat_times) > 10_000:
+            _chat_times.clear()
+    return allowed
+
+
+@router.post("/research/{ticker}/chat")
+def research_chat(ticker: str, body: ChatRequest, request: Request):
+    """Answers a question about the company's stored filings, citing the passages it used."""
+    if not research_db.database_url():
+        raise HTTPException(status_code=503, detail="The research store is not configured.")
+    visitor = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "")).split(",")[0].strip()
+    if not _chat_allowed(visitor):
+        raise HTTPException(status_code=429, detail="Too many questions in a minute; wait a moment and ask again.")
+    return json_errors(research_service.ask, ticker, body.question, [t.model_dump() for t in body.history])
 
 
 @router.get("/research/{ticker}/filings")
