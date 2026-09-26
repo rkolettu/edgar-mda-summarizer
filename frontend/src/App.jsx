@@ -292,7 +292,8 @@ export default function App() {
     setQuery(ticker)
 
     // The AI analysis is written once per filing and then stored; ask for it only when it is missing.
-    if (data.insights?.status === 'ready' || !data.insights?.configured) return
+    // The omission check runs after the summary; a summary without it (a spent quota) asks again.
+    if ((data.insights?.status === 'ready' && data.insights?.audit) || !data.insights?.configured) return
     setInsightsRequest({ status: 'loading' })
     try {
       const updated = await postJson(`/api/research/${encodeURIComponent(ticker)}/insights`)

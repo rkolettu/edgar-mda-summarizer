@@ -5,12 +5,16 @@ import { Evidence, FigureText, UnverifiedToggle } from './Verification'
 
 // Where an AI view stands: written, being written, unavailable, or not configured on this deployment.
 export function InsightsNotice({ insights, request }) {
-  if (insights?.status === 'ready') return null
+  const ready = insights?.status === 'ready'
   let text
   if (request?.status === 'loading') {
-    text = 'Writing the AI analysis from the stored filings. It reads each filing once, which takes about a minute; later visits load it instantly.'
+    text = ready
+      ? 'Checking the summary for anything material it left out.'
+      : 'Writing the AI analysis from the stored filings. It reads each filing once, which takes about a minute; later visits load it instantly.'
   } else if (request?.status === 'error') {
     text = request.error
+  } else if (ready) {
+    return null
   } else if (insights?.configured === false) {
     text = 'AI analysis is not configured on this deployment. Everything else on this page is built from the filings without it.'
   } else if (insights?.status === 'partial') {

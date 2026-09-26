@@ -1,8 +1,8 @@
-import { ArrowRight } from 'lucide-react'
+import { ArrowRight, ChevronDown, ListChecks } from 'lucide-react'
 import { formatPct, formatSignedPct, formatUnit, periodLabel } from '../lib/format'
 import { Delta, Tile } from './KpiStrip'
 import { MarginChart, RevenueCashChart } from './FinancialsTab'
-import { AiLabel, Card, InsightsNotice, SectionHeader, SynthPoint } from './Insights'
+import { AiLabel, Badge, Card, InsightsNotice, SectionHeader, SynthPoint } from './Insights'
 
 function latest(table, key) {
   const row = table?.rows?.find((r) => r.key === key)
@@ -41,6 +41,73 @@ function Kpis({ financials }) {
       </div>
       <p className="mt-3 text-[11px] text-muted">From the XBRL data tagged in the company&apos;s filings; growth is year over year.</p>
     </section>
+  )
+}
+
+const DECISION = {
+  covered: 'Covered',
+  add: 'Added below',
+  not_material: 'Not material',
+  unresolved: 'Not resolved',
+}
+
+function plural(n, word) {
+  return `${n} ${word}${n === 1 ? '' : 's'}`
+}
+
+// The second pass: what code flagged as material, whether the summary covers it, and what the check added.
+function OmissionCheck({ audit }) {
+  if (!audit) return null
+  const { counts, checked } = audit
+  const parts = [
+    `${counts.covered} covered by the summary`,
+    counts.add && `${counts.add} added below`,
+    counts.not_material && `${counts.not_material} judged not material`,
+    counts.unresolved && `${counts.unresolved} not resolved`,
+  ].filter(Boolean)
+  return (
+    <Card
+      className="mb-8"
+      title="Omission check"
+      aside={<span className="inline-flex items-center gap-1 text-xs text-muted"><ListChecks size={13} aria-hidden /> {plural(checked, 'item')} checked</span>}
+    >
+      <p className="px-5 py-4 text-sm leading-relaxed text-ink-2 sm:px-6">
+        {checked === 0
+          ? 'Code flagged no top-tier change, subsequent event, new guarantee or serious filing language for this filing.'
+          : `Code flagged ${plural(checked, 'item')} a reader should not miss (the most material filing changes, subsequent events, new guarantees and financing, and filing language saying a serious event has happened): ${parts.join(', ')}.`}
+        {audit.model === 'none' && checked > 0 ? ' The summary cites all of them, so no AI review was needed.' : ''}
+      </p>
+      {audit.additions?.length > 0 && (
+        <ol className="divide-y divide-line border-t border-line">
+          {audit.additions.map((item, i) => (
+            <li key={i} className="px-5 py-5 sm:px-6">
+              <SynthPoint item={item} badges={<Badge tone="accent">Added by the check</Badge>} />
+            </li>
+          ))}
+        </ol>
+      )}
+      {checked > 0 && (
+        <details className="group border-t border-line">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 px-5 py-3 text-xs font-medium text-accent select-none hover:text-accent-hover sm:px-6">
+            <ChevronDown size={13} aria-hidden className="group-open:rotate-180" />
+            Every item checked
+          </summary>
+          <ul className="divide-y divide-line border-t border-line">
+            {audit.items.map((item) => (
+              <li key={item.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-5 py-3 text-sm sm:px-6">
+                <span className="min-w-0 flex-1 text-ink">{item.label} <span className="text-xs text-muted">· {item.category}</span></span>
+                {item.text && <span className="order-last w-full text-xs text-ink-2 italic">“{item.text}”</span>}
+                <span className="text-xs font-medium text-ink">{DECISION[item.decision] ?? item.decision}</span>
+                <span className="w-full text-xs text-muted">
+                  {item.decision === 'covered' && item.covered_by ? `By “${item.covered_by}”` : item.reason}
+                  {` · ${item.by === 'code' ? 'checked in code' : 'reviewed by AI'}`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </Card>
   )
 }
 
@@ -91,13 +158,14 @@ export default function OverviewTab({ research, request, onNavigate }) {
             Written from the stored financials, filing changes and quoted filing text. Each point names the facts it rests on, and every figure is
             checked against them.
           </SectionHeader>
-          <Card className="mb-8">
+          <Card className="mb-5">
             <ol className="divide-y divide-line">
               {takeaways.map((item, i) => (
                 <li key={i} className="px-5 py-5 sm:px-6"><SynthPoint item={item} /></li>
               ))}
             </ol>
           </Card>
+          <OmissionCheck audit={insights.audit} />
         </>
       )}
       <Kpis financials={financials} />

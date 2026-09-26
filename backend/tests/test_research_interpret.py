@@ -100,7 +100,8 @@ def test_stages_run_once_verify_quotes_figures_and_references(research_conn, com
     assert len(synth["change_notes"]) == 1
 
     runs = research_conn.execute("SELECT stage, status, model FROM analysis_runs WHERE stage <> 'parse' ORDER BY run_id").fetchall()
-    assert runs == [("extract", "succeeded", "gemini-3.5-flash-lite")] * 2 + [("synthesize", "succeeded", "gemini-3.8-flash")]
+    assert runs == [("extract", "succeeded", "gemini-3.5-flash-lite")] * 2 + [("synthesize", "succeeded", "gemini-3.8-flash")] + [
+        ("audit", "succeeded", "none")]  # nothing flagged was left uncited, so the check needed no model call
 
     payload = store.load_snapshot(research_conn, company["company_id"])["payload"]
     insights = payload["insights"]

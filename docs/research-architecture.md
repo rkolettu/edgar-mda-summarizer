@@ -195,6 +195,33 @@ With A's items added, B is roughly 4-6k tokens, so a company's first analysis co
 calls (the legacy summary: about 99k per cache miss, repeated whenever any of its three filings changed), and a new
 10-Q costs one A call and one B call. Tab views cost nothing.
 
+## Omission audit (phase 5, call C)
+
+`research/audit.py` runs after the synthesis, once per latest filing:
+
+1. **Code lists what a reader must not miss:** every top-tier filing change, and any change flagged as a subsequent
+   event, new guarantee, new financing or language that moved from hypothetical to realized (up to 12 not yet
+   cited); and sentences in the latest filings where a serious trigger phrase (weight ≥ 0.6: material weakness,
+   going concern, restatement, subpoena, default, effectively foreclosed, credit support, export controls,
+   cybersecurity incident, ...) describes something that has happened, not something that could, and is not negated
+   ("we did not identify a material weakness"), one per phrase (up to 6).
+2. **Code marks what the summary already covers:** a change is covered when a takeaway, ranked risk or earnings point
+   cites it (or cites the financial line it is, e.g. `m.revenue` for a revenue change); a sentence when the summary
+   names its phrase.
+3. **Only the rest goes to a model** (Flash, low reasoning depth; `GEMINI_AUDIT_MODEL` overrides it), which answers
+   per item: covered after all (naming the summary point), missing (writing up to 3 additions that cite the items),
+   or not material (with a reason). A "covered" that names a point that does not exist, or an item the model skips,
+   is recorded as not resolved; additions citing no flagged item are dropped, and their figures are checked like the
+   summary's. When nothing is left over, no model is called.
+
+The Overview shows the result under the takeaways: how many items were checked, how many the summary covers, what
+was added, and every item with its decision, who made it (code or AI) and why. A spent quota on the audit keeps the
+summary; the page asks again on the next visit. On NVIDIA's Q2 FY2027 10-Q it flags 18 items: 14 filing changes and 4
+sentences ("we were effectively foreclosed from competing in China's data center compute market", the SB Energy
+guarantee "to provide credit support", an export-control sentence and a cyber-attack sentence); with a stand-in
+summary citing two of them, 16 went to the model. Measured input with nothing cited (the upper bound): NVIDIA 16
+items, about 1.3k tokens; Microsoft 12, 1.1k; TSMC 4, 0.7k; Suncor 4, 0.6k, plus the summary's own text.
+
 ## Filing-type adapters
 
 `backend/research/adapters.py` is the only layer that knows form types. Each adapter declares its forms, the
@@ -213,7 +240,7 @@ acquisitions, 2.03 debt or guarantees, 2.05/2.06 restructuring or impairment, 4.
 | 2 Deterministic facts | Disclosure families (commitments, guarantees, debt, investments, capital return, non-operating and unusual items, customer concentration, backlog, taxes) and segment, geographic and product revenue; renamed-category linking; derived metrics and working capital; 5-year history from three annual reports; snapshot builder; on-demand `GET /api/research/{ticker}` with storage guard; tab frame, Financials tab, Capital & Commitments tab | **Done** |
 | 3 Compare and score | Comparison engine (previous report, annual report, year earlier), disclosure status, sentence fingerprints and narrative diffs, trigger phrases with modality, materiality scoring, grouping, `filing_changes`; Filing Changes tab | **Done** |
 | 4 Interpretation | Calls A and B, insights bound to fact ids, verification; Overview, Business & Strategy, Risks, Earnings Quality | **Done** |
-| 5 Audit and robustness | Call C; full-text and model fallbacks; 6-K, 8-K; messy-filer regression set | |
+| 5 Audit and robustness | Call C, the omission audit (**done**); full-text and model fallbacks; 6-K, 8-K; messy-filer regression set | Audit done |
 | 6 Polish | Source drill-downs; retire `/api/summarize` and the `analyses` cache | |
 
 ## Phase 1 findings

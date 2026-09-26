@@ -40,7 +40,9 @@ sources and coverage) so several research tabs can render without rereading fili
   the first request; every tab reads it. Financials, Capital & Commitments and Filing Changes are built from the
   filings in code (Filing Changes ranks what the latest filing adds, changes or drops, numbers and wording, with a
   materiality score); Overview, Business & Strategy, Risks and Earnings Quality add an AI analysis that is written
-  once per filing, quotes the filing for every extracted item, and cites the stored facts for every summary point.
+  once per filing, quotes the filing for every extracted item, and cites the stored facts for every summary point. An
+  omission check then lists everything material code flagged (top filing changes, subsequent events, new guarantees,
+  serious filing language) and shows whether the summary covers each item, what it added, and why the rest was left out.
 - `POST /api/research/{ticker}/insights` writes that analysis when it is missing (Gemini free tier: Flash-Lite reads
   the filing text, Flash writes the summary from stored facts; Mistral's free tier is an optional fallback). The
   legacy `/api/summarize` is used only when the research store cannot serve a company. `GET /api/research/{ticker}/filings` lists the stored filings and their coverage.

@@ -30,6 +30,7 @@ from research.rows import fiscal_label
 # Bump when a stage's prompt, schema or inputs change; outputs at an older version are regenerated on request.
 EXTRACT_VERSION = 1
 SYNTH_VERSION = 1
+AUDIT_VERSION = 1
 
 LIMITS = {
     "business": 30_000,
@@ -495,13 +496,14 @@ def targets(filings: list[dict]) -> list[dict]:
 def stored_outputs(conn: psycopg.Connection, company_id: int) -> dict[tuple[int, str], dict]:
     rows = conn.execute(
         "SELECT filing_id, stage, model, output, created_at FROM model_outputs WHERE company_id = %s AND "
-        "((stage = 'extract' AND pipeline_version = %s) OR (stage = 'synthesize' AND pipeline_version = %s))",
-        (company_id, EXTRACT_VERSION, SYNTH_VERSION),
+        "((stage = 'extract' AND pipeline_version = %s) OR (stage = 'synthesize' AND pipeline_version = %s)"
+        " OR (stage = 'audit' AND pipeline_version = %s))",
+        (company_id, EXTRACT_VERSION, SYNTH_VERSION, AUDIT_VERSION),
     ).fetchall()
     return {(fid, stage): {"model": model, "output": output, "created_at": created} for fid, stage, model, output, created in rows}
 
 
-def _save(conn: psycopg.Connection, company_id: int, filing_id: int, stage: str, version: int, result: llm.Result,
+def _save(conn: psycopg.Connection, company_id: int, filing_id: int, stage: str, version: int, model: str,
           input_chars: int, output: dict) -> None:
     conn.execute(
         """
@@ -510,7 +512,7 @@ def _save(conn: psycopg.Connection, company_id: int, filing_id: int, stage: str,
         ON CONFLICT (filing_id, stage, pipeline_version) DO UPDATE SET model = EXCLUDED.model,
             input_chars = EXCLUDED.input_chars, output = EXCLUDED.output, created_at = now()
         """,
-        (company_id, filing_id, stage, version, result.model, input_chars, Jsonb(output)),
+        (company_id, filing_id, stage, version, model, input_chars, Jsonb(output)),
     )
 
 
@@ -568,7 +570,8 @@ def run(conn: psycopg.Connection, company_id: int, force: bool = False) -> bool:
                     result = future.result()
                     output = verify_extraction(result.data, job.text, [r for r in rows if r["filing_id"] == job.filing["filing_id"]])
                     with conn.transaction():
-                        _save(conn, company_id, job.filing["filing_id"], "extract", EXTRACT_VERSION, result, len(job.text), output)
+                        _save(conn, company_id, job.filing["filing_id"], "extract", EXTRACT_VERSION, result.model, len(job.text),
+                              output)
                         store.finish_stage(conn, job.run_id, "succeeded", filing_id=job.filing["filing_id"], model=result.model,
                                            input_tokens=result.input_tokens, output_tokens=result.output_tokens)
                 except Exception as exc:  # noqa: BLE001 - release the lock whatever failed, then report it
@@ -595,19 +598,61 @@ def run(conn: psycopg.Connection, company_id: int, force: bool = False) -> bool:
             result = llm.generate("synthesize", SYNTH_PROMPT, source.text, Synthesis)
             output = verify_synthesis(result.data, source, payload)
             with conn.transaction():
-                _save(conn, company_id, latest["filing_id"], "synthesize", SYNTH_VERSION, result, len(source.text), output)
+                _save(conn, company_id, latest["filing_id"], "synthesize", SYNTH_VERSION, result.model, len(source.text), output)
                 store.finish_stage(conn, run_id, "succeeded", filing_id=latest["filing_id"], model=result.model,
                                    input_tokens=result.input_tokens, output_tokens=result.output_tokens)
-                # Earlier syntheses describe filings the tabs no longer show.
-                conn.execute("DELETE FROM model_outputs WHERE company_id = %s AND stage = 'synthesize' AND filing_id <> %s",
-                             (company_id, latest["filing_id"]))
+                # Earlier syntheses and audits describe filings the tabs no longer show.
+                conn.execute("DELETE FROM model_outputs WHERE company_id = %s AND stage IN ('synthesize', 'audit') "
+                             "AND filing_id <> %s", (company_id, latest["filing_id"]))
         except Exception as exc:
             store.finish_stage(conn, run_id, "failed", filing_id=latest["filing_id"], error=str(exc)[:500])
             raise
         produced = True
+        outputs = stored_outputs(conn, company_id)
+
+    if (latest["filing_id"], "synthesize") in outputs and ((latest["filing_id"], "audit") not in outputs or force):
+        try:
+            produced |= _run_audit(conn, company_id, filings, chosen, outputs, force)
+        except (llm.ModelUnavailable, Busy) as exc:
+            # The summary stands without its check; the next request (or the daily job) runs the audit again.
+            print(f"omission audit not run: {exc}", flush=True)
     if produced:
         snapshot.rebuild(conn, company_id)
     return produced
+
+
+def _run_audit(conn: psycopg.Connection, company_id: int, filings: list[dict], chosen: list[dict], outputs: dict,
+               force: bool) -> bool:
+    from research import audit, snapshot
+
+    latest = chosen[0]
+    run_id = store.claim_stage(conn, latest["accession_number"], "audit", AUDIT_VERSION, force=force)
+    if run_id is None:
+        raise Busy("An omission audit for this company is already running.")
+    try:
+        synth = outputs[(latest["filing_id"], "synthesize")]["output"]
+        payload, _, _ = snapshot.build(conn, company_id)
+        extractions = [(f, outputs[(f["filing_id"], "extract")]["output"]) for f in chosen if (f["filing_id"], "extract") in outputs]
+        ids = {f["filing_id"] for f in chosen}
+        sections = [s for s in store.company_sections(conn, company_id, audit.LANGUAGE_CATEGORIES) if s["filing_id"] in ids]
+        items = audit.candidates(payload, synth, sections, filings, extractions)
+        open_items = [c for c in items if not c.covered_by]
+        model, tokens, text = "none", (None, None), ""
+        if open_items:
+            text = audit.audit_input(payload, synth, open_items)
+            result = llm.generate("audit", audit.AUDIT_PROMPT, text, audit.Audit)
+            output = audit.verify(result.data, text, payload, synth, items)
+            model, tokens = result.model, (result.input_tokens, result.output_tokens)
+        else:
+            output = audit.all_covered(items)  # the summary cites everything flagged: no model call
+        with conn.transaction():
+            _save(conn, company_id, latest["filing_id"], "audit", AUDIT_VERSION, model, len(text), output)
+            store.finish_stage(conn, run_id, "succeeded", filing_id=latest["filing_id"], model=model,
+                               input_tokens=tokens[0], output_tokens=tokens[1])
+    except Exception as exc:
+        store.finish_stage(conn, run_id, "failed", filing_id=latest["filing_id"], error=str(exc)[:500])
+        raise
+    return True
 
 
 # --- the snapshot's insights section ---
@@ -636,6 +681,7 @@ def insights_section(conn: psycopg.Connection, company_id: int, filings: list[di
     outputs = stored_outputs(conn, company_id)
     extractions = [(f, outputs[(f["filing_id"], "extract")]["output"]) for f in chosen if (f["filing_id"], "extract") in outputs]
     synthesis = outputs.get((chosen[0]["filing_id"], "synthesize")) if chosen else None
+    audit = outputs.get((chosen[0]["filing_id"], "audit")) if chosen else None
     if not extractions and not synthesis:
         return {"status": "pending"}
     synth = synthesis["output"] if synthesis else {}
@@ -649,8 +695,8 @@ def insights_section(conn: psycopg.Connection, company_id: int, filings: list[di
         found = by_label.get((ref.get("filing"), ref.get("label"))) if ref["type"] == "extraction" else None
         ranked.append({**risk, "extracted": _with_source([found[1]], found[0])[0] if found else None})
 
-    used = [outputs[(f["filing_id"], "extract")] for f, _ in extractions] + ([synthesis] if synthesis else [])
-    models = sorted({o["model"] for o in used})
+    used = [outputs[(f["filing_id"], "extract")] for f, _ in extractions] + [o for o in (synthesis, audit) if o]
+    models = sorted({o["model"] for o in used} - {"none"})
     return {
         "status": "ready" if synthesis else "partial",
         "models": models,
@@ -671,4 +717,5 @@ def insights_section(conn: psycopg.Connection, company_id: int, filings: list[di
         "risks": {"ranked": ranked, "extracted": _merged(extractions, "risks", 16)},
         "earnings_quality": {**synth.get("earnings_quality", {}), "explanations": _merged(extractions, "non_operating", 6)},
         "change_notes": synth.get("change_notes", {}),
+        "audit": {**audit["output"], "model": audit["model"]} if audit else None,
     }

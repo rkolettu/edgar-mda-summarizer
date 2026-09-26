@@ -23,6 +23,7 @@ import analysis
 STAGES = {
     "extract": ("GEMINI_EXTRACT_MODEL", "gemini-3.5-flash-lite", "LOW"),
     "synthesize": ("GEMINI_SYNTH_MODEL", "gemini-3.8-flash", "MEDIUM"),
+    "audit": ("GEMINI_AUDIT_MODEL", "gemini-3.8-flash", "LOW"),
 }
 MAX_OUTPUT_TOKENS = 16_384
 MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions"
