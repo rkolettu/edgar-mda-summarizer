@@ -137,11 +137,67 @@ function Cell({ cell, unit, currency }) {
   )
 }
 
-function FinancialTable({ table, currency, profile, halfYears }) {
+// A note's number beside a cell, linking to its explanation under the table.
+function NoteMarks({ notes, idPrefix }) {
+  if (!notes?.length) return null
+  return (
+    <sup className="ml-0.5 font-sans text-[10px] font-semibold">
+      {notes.map((n, i) => (
+        <a key={n.n} href={`#${idPrefix}-note-${n.n}`} aria-label={`Note ${n.n}`}
+          className={`${n.kind === 'unusual' ? 'text-accent' : 'text-muted'} hover:underline`}>
+          {i > 0 && ','}{n.n}
+        </a>
+      ))}
+    </sup>
+  )
+}
+
+// Why figures are blank or look unusual, and the headline lines the table cannot show (research/notes.py).
+function TableNotes({ table, idPrefix }) {
+  const notes = table.notes ?? []
+  const omitted = table.omitted ?? []
+  if (!notes.length && !omitted.length) return null
+  return (
+    <div className="border-t border-line px-5 py-4 text-xs leading-relaxed text-ink-2 sm:px-6">
+      {notes.length > 0 && (
+        <>
+          <p className="mb-2 text-[11px] font-semibold tracking-[0.08em] text-muted uppercase">Notes on these figures</p>
+          <ol className="space-y-1.5">
+            {notes.map((n) => (
+              <li key={n.n} id={`${idPrefix}-note-${n.n}`} className="flex gap-2 scroll-mt-24">
+                <span className={`w-5 shrink-0 text-right font-semibold ${n.kind === 'unusual' ? 'text-accent' : 'text-muted'}`}>{n.n}</span>
+                <span>
+                  <span className="font-semibold text-ink">{n.kind === 'unusual' ? 'Unusual figure. ' : 'Blank. '}</span>
+                  {n.text}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+      {omitted.length > 0 && (
+        <>
+          <p className={`mb-2 text-[11px] font-semibold tracking-[0.08em] text-muted uppercase ${notes.length ? 'mt-4' : ''}`}>Not shown</p>
+          <ul className="space-y-1.5">
+            {omitted.map((o) => (
+              <li key={o.key}><span className="font-semibold text-ink">{o.label}.</span> {o.reason}</li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  )
+}
+
+function FinancialTable({ table, currency, profile, halfYears, idPrefix }) {
   const groups = []
   for (const row of table.rows) {
     if (groups.at(-1)?.name !== row.group) groups.push({ name: row.group, rows: [] })
     groups.at(-1).rows.push(row)
+  }
+  const notesAt = new Map()
+  for (const note of table.notes ?? []) {
+    for (const [key, col] of note.cells) notesAt.set(`${key}:${col}`, [...(notesAt.get(`${key}:${col}`) ?? []), note])
   }
   return (
     <section className="editorial-card overflow-hidden rounded-2xl border border-line bg-panel">
@@ -175,6 +231,7 @@ function FinancialTable({ table, currency, profile, halfYears }) {
                     {row.values.map((cell, i) => (
                       <td key={i} className={`px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap last:pr-5 sm:last:pr-6 ${secondary ? 'text-ink-2' : 'text-ink'}`}>
                         <Cell cell={cell} unit={row.unit} currency={currency} />
+                        <NoteMarks notes={notesAt.get(`${row.key}:${i}`)} idPrefix={idPrefix} />
                       </td>
                     ))}
                   </tr>
@@ -184,6 +241,7 @@ function FinancialTable({ table, currency, profile, halfYears }) {
           ))}
         </table>
       </div>
+      <TableNotes table={table} idPrefix={idPrefix} />
       <footer className="border-t border-line px-5 py-3 text-[11px] leading-relaxed text-muted sm:px-6">
         From the company's XBRL-tagged filings, in {currency}; restated figures replace earlier ones. * Calculated from reported
         figures: {profile === 'bank'
@@ -282,7 +340,7 @@ export default function FinancialsTab({ research }) {
             <RevenueCashChart table={table} currency={currency} profile={financials.profile} />
             <MarginChart table={table} profile={financials.profile} />
           </div>
-          <FinancialTable table={table} currency={currency} profile={financials.profile}
+          <FinancialTable table={table} currency={currency} profile={financials.profile} idPrefix={view}
             halfYears={view === 'quarterly' && interim?.kind === 'half_yearly'} />
           <Breakdowns breakdowns={financials.breakdowns ?? []} view={view} currency={currency} />
         </>

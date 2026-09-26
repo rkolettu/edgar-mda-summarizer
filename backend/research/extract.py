@@ -25,7 +25,8 @@ from research.ixbrl import Fact, IxbrlFiling, Period, local_name
 # 5: foreign issuers' sections (20-F cross-reference tables, 40-F document sets), bank lines, IFRS fallbacks.
 # 6: joint filings' documents are read once (a co-registrant's link to the same file was parsed again).
 # 7: banks' own tags for credit losses, net loans and buybacks (TD).
-PARSER_VERSION = 7
+# 8: one-off gains (bargain purchases, disposals of associates) as unusual items.
+PARSER_VERSION = 8
 
 ANNUAL_FORMS = {"10-K", "10-KT", "20-F", "40-F"}
 YEAR_DAYS = 365.25

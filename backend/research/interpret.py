@@ -25,7 +25,7 @@ from pydantic import BaseModel
 import verify
 from figures import FigureIndex, check_figures
 from research import llm, narrative, store
-from research.rows import fiscal_label
+from research.rows import fiscal_label, money
 
 # Bump when a stage's prompt, schema or inputs change; outputs at an older version are regenerated on request.
 EXTRACT_VERSION = 1
@@ -289,15 +289,7 @@ def verify_extraction(result: Extraction, source: str, rows: list[dict]) -> dict
 
 
 def _money(value: float | None, currency: str | None) -> str:
-    if value is None:
-        return "n/a"
-    prefix = {"USD": "$", "TWD": "NT$", "CAD": "C$", "HKD": "HK$", "AUD": "A$", "EUR": "€", "GBP": "£", "JPY": "¥"}.get(
-        currency or "", f"{currency} " if currency else "")
-    sign, amount = ("-" if value < 0 else ""), abs(value)
-    for scale, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
-        if amount >= scale:
-            return f"{sign}{prefix}{amount / scale:.1f}{suffix}"
-    return f"{sign}{prefix}{amount:,.0f}"
+    return money(value, currency)
 
 
 def _value(value: float | None, unit: str, currency: str | None) -> str:

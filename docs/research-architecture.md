@@ -294,6 +294,32 @@ NoninterestExpense, ProvisionForLoanLeaseAndOtherLosses), company concepts that 
 exposure, keeping totals and single breakdowns; its balances are scored by how much they moved against total assets,
 and its operating cash flow and debt issuance are not reported as changes.
 
+## Notes on figures
+
+`research/notes.py` explains, in code, why a cell of a financial table is blank or looks unusual; the page numbers
+the notes under the table and marks the cells. Blanks:
+- A Q4 or H2 per-share amount is never derived.
+- A quarter is worked out from year-to-date totals, and one of them is missing.
+- The report for the period (often a condensed interim one) doesn't tag the line.
+- An early year comes only from a later report's comparative columns.
+- A ratio lacks an input, or means nothing (cash conversion when net income is a loss).
+
+Headline lines missing from the whole table are listed as not shown, with the reason: an IFRS income statement
+without gross profit or operating income, a line the company doesn't tag, or the bank layout.
+
+Unusual figures:
+- A peak stands above the periods on both sides by 1.8 times or more. The first or latest period is flagged only
+  when a tagged cause explains it, since lasting growth looks the same until the next period.
+- The note names the tagged one-off that accounts for at least 40% of the excess when there is one, matching its
+  direction: a gain for a peak, a charge for a loss. Examples are UBS's $27.7B bargain purchase gain on Credit Suisse
+  and TD's C$9.2B gain on its Schwab stake, which is why those two gains are now captured as unusual items.
+- Other callouts: a credit loss release, dividends that slipped into the next quarter (TD's Q1 FY2026), and
+  payments far below their usual level.
+
+The landing page says what to expect: figures are parsed, not hand-checked; foreign filers are the roughest; the AI
+runs on free-tier models; it is a personal project. A company opens at `?c=TICKER`, so the browser's back button,
+the logo and the breadcrumb all lead home.
+
 ## Phases
 
 | Phase | Scope | Status |
