@@ -23,7 +23,8 @@ from research.ixbrl import Fact, IxbrlFiling, Period, local_name
 # 3: country names for geographic members (country:TW -> Taiwan).
 # 4: narrative sections keep paragraphs as lines; business sections (10-K Item 1, 20-F Item 4).
 # 5: foreign issuers' sections (20-F cross-reference tables, 40-F document sets), bank lines, IFRS fallbacks.
-PARSER_VERSION = 5
+# 6: joint filings' documents are read once (a co-registrant's link to the same file was parsed again).
+PARSER_VERSION = 6
 
 ANNUAL_FORMS = {"10-K", "10-KT", "20-F", "40-F"}
 YEAR_DAYS = 365.25

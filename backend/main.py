@@ -42,7 +42,20 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-App-Build"],
 )
+
+# The commit this deployment runs. A browser tab still running an older build's code reloads itself when it sees a
+# different one (frontend/src/lib/api.js), rather than showing new data through old code.
+APP_BUILD = os.environ.get("VERCEL_GIT_COMMIT_SHA", "")
+
+
+@app.middleware("http")
+async def build_header(request, call_next):
+    response = await call_next(request)
+    if APP_BUILD:
+        response.headers["X-App-Build"] = APP_BUILD
+    return response
 
 
 class ResultCache:

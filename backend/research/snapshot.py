@@ -16,7 +16,7 @@ from research.extract import PARSER_VERSION
 from research.rows import fiscal_label, latest_by, reported_label, source
 
 # Bump when the payload's shape or meaning changes; stored snapshots at an older version are rebuilt on read.
-SNAPSHOT_VERSION = 4
+SNAPSHOT_VERSION = 5
 
 CAPITAL_SECTIONS = [
     ("commitment", "Commitments"),
@@ -114,6 +114,22 @@ def _item(rows: list[dict], context: dict) -> dict | None:
     }
 
 
+def _distinct(items: list[dict]) -> list[dict]:
+    """Drops an item that repeats another's concept and figures under a different breakdown member: IFRS filers tag
+    one total under both the class-of-assets default and the measurement category ("Financial assets at amortised
+    cost"). The shortest label, sorted first among equals, is kept. A line that is zero in every period says nothing."""
+    seen, kept = set(), []
+    for item in items:
+        if not any(p["value"] for p in item["series"]):
+            continue
+        signature = (item["label"].split(":")[0], item["unit"], item["currency"],
+                     tuple((p["period_end"], p["value"]) for p in item["series"]))
+        if signature not in seen:
+            seen.add(signature)
+            kept.append(item)
+    return kept
+
+
 def capital(rows: list[dict], aliases: dict[str, str], context: dict) -> list[dict]:
     groups: dict[tuple, list[dict]] = defaultdict(list)
     section_keys = {key for key, _ in CAPITAL_SECTIONS}
@@ -133,7 +149,8 @@ def capital(rows: list[dict], aliases: dict[str, str], context: dict) -> list[di
             by_section[section].append(item)
     sections = []
     for key, label in CAPITAL_SECTIONS:
-        items = sorted(by_section.get(key, []), key=lambda i: (i["unit"] != "currency", -abs(i["latest"]["value"] or 0)))
+        items = _distinct(sorted(by_section.get(key, []), key=lambda i: (i["unit"] != "currency", -abs(i["latest"]["value"] or 0),
+                                                                        len(i["label"]))))
         if items:
             sections.append({"key": key, "label": label, "items": items[:MAX_ITEMS], "more": max(0, len(items) - MAX_ITEMS)})
     return sections
@@ -284,6 +301,38 @@ def filing_changes(records: list[changes.ChangeRecord], filings: list[dict], rev
     }
 
 
+def risk_wording(rows: list[dict], sections: list[dict], filings: list[dict], latest: dict | None,
+                 m: metrics.Metrics, currency: str | None) -> dict | None:
+    """When the latest filing is an interim report without risk factors (a 6-K), the risk factor wording that changed
+    between the last two annual reports; None when the latest filing's own changes cover its risk factors."""
+    if latest is None or latest["is_annual"] or any(
+            s["filing_id"] == latest["filing_id"] and s["category"] == "risk_factors" for s in sections):
+        return None
+    records = changes.annual_risk_changes(rows, sections, filings, m, currency)
+    annual = changes.Bases.of([f for f in filings if f["is_annual"]])
+    if annual is None or annual.previous is None:
+        return None
+    by_id = {f["filing_id"]: f for f in filings}
+    return {
+        "filing": _filing_ref(annual.latest), "base": _filing_ref(annual.previous),
+        "items": [_change_item(r, by_id) for r in records],
+        "note": (f"The latest filing, a {latest['form_type']} interim report, has no risk factors section; the company "
+                 f"updates them in its annual report. These are the changes between its last two annual reports."),
+    }
+
+
+def _half_year_labels(filings: list[dict], rows: list[dict]) -> None:
+    """A half-year report is tagged as the second quarter (there is no H1 fiscal period in the cover tags); it and
+    its six-month figures and balances are labelled H1, like the half-year columns. Metrics has already read the
+    rows by their tagged period."""
+    for f in filings:
+        if not f["is_annual"] and f["fiscal_period"] == "Q2":
+            f["fiscal_period"] = "H1"
+    for r in rows:
+        if r["fiscal_period"] == "Q2" and (r["period_type"] == "instant" or (r["period_months"] or 0) >= 6):
+            r["fiscal_period"] = "H1"
+
+
 def build(conn: psycopg.Connection, company_id: int) -> tuple[dict, int | None, list[changes.ChangeRecord]]:
     company = store.find_company(conn, company_id=company_id)
     filings = store.company_filings(conn, company_id)
@@ -294,6 +343,8 @@ def build(conn: psycopg.Connection, company_id: int) -> tuple[dict, int | None, 
     alias_map = store.aliases(conn, company_id)
     m = metrics.Metrics([r for r in rows if r["canonical_metric"]])
     m.set_interim(filings)
+    if m.interim_kind() == "half_yearly":
+        _half_year_labels(filings, rows)
 
     context = {
         "latest_filing_id": latest["filing_id"] if latest else None,
@@ -336,6 +387,7 @@ def build(conn: psycopg.Connection, company_id: int) -> tuple[dict, int | None, 
         "capital": {"sections": capital(rows, alias_map, context)},
         "earnings_quality": {"bridges": earnings_quality(rows, m, bridge_periods, bank)},
         "changes": filing_changes(records, filings, revenue),
+        "risk_wording": risk_wording(rows, sections, filings, latest, m, company["reporting_currency"]),
         "insights": interpret.insights_section(conn, company_id, filings),
     }
     notes = payload["insights"].get("change_notes") or {}

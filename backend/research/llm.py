@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 
 import requests
@@ -29,6 +30,10 @@ MAX_OUTPUT_TOKENS = 16_384
 MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions"
 MISTRAL_TIMEOUT = 180
 UNAVAILABLE_MARKERS = ("not found", "not supported", "permission", "limiting access", "unavailable", "overloaded")
+# Google answers 503 "experiencing high demand" in short spikes: the same model is tried again after these waits
+# before the stage falls back to a smaller one.
+OVERLOAD_WAITS = (4, 10)
+OVERLOAD_MARKERS = ("high demand", "overloaded", "try again later")
 
 
 class ModelUnavailable(Exception):
@@ -49,6 +54,29 @@ class Result:
 
 def configured() -> bool:
     return bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("MISTRAL_API_KEY"))
+
+
+def preferred(stage: str) -> str:
+    """The model a stage is meant to run on; the rest of its chain are fallbacks."""
+    return chain(stage)[0]
+
+
+def _overloaded(exc: Exception) -> bool:
+    if getattr(exc, "code", None) == 429 or analysis.is_usage_limit_error(exc):
+        return False  # a spent quota does not come back in seconds
+    return getattr(exc, "code", None) in (500, 502, 503) or any(m in str(exc).lower() for m in OVERLOAD_MARKERS)
+
+
+def _gemini_retrying(model: str, stage: str, system: str, contents: str, schema: type[BaseModel]) -> Result:
+    for wait in (*OVERLOAD_WAITS, None):
+        try:
+            return _gemini(model, stage, system, contents, schema)
+        except Exception as exc:  # noqa: BLE001 - only an overload is retried; anything else goes to the caller
+            if wait is None or not _overloaded(exc):
+                raise
+            print(f"research model {model} overloaded for {stage}; retrying in {wait}s", flush=True)
+            time.sleep(wait)
+    raise AssertionError("unreachable")
 
 
 def chain(stage: str) -> list[str]:
@@ -116,19 +144,21 @@ def _mistral(system: str, contents: str, schema: type[BaseModel]) -> Result:
     return Result(data, model, usage.get("prompt_tokens"), usage.get("completion_tokens"))
 
 
-def generate(stage: str, system: str, contents: str, schema: type[BaseModel]) -> Result:
+def generate(stage: str, system: str, contents: str, schema: type[BaseModel], preferred_only: bool = False) -> Result:
+    """Runs a stage on its model, falling back along its chain. With preferred_only, only the stage's own model is
+    tried (rewriting an answer a fallback model gave is worth doing only with the better model)."""
     failures: list[tuple[str, str]] = []
     if os.environ.get("GEMINI_API_KEY"):
-        for model in chain(stage):
+        for model in chain(stage)[:1] if preferred_only else chain(stage):
             try:
-                result = _gemini(model, stage, system, contents, schema)
+                result = _gemini_retrying(model, stage, system, contents, schema)
             except Exception as exc:  # noqa: BLE001 - every failure moves to the next model
                 failures.append((model, _kind(exc)))
                 print(f"research model {model} failed for {stage}: {_kind(exc)}: {str(exc)[:200]}", flush=True)
                 continue
             _log(stage, schema, result)
             return result
-    if os.environ.get("MISTRAL_API_KEY"):
+    if os.environ.get("MISTRAL_API_KEY") and not preferred_only:
         try:
             result = _mistral(system, contents, schema)
         except ModelUnavailable:

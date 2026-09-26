@@ -206,3 +206,60 @@ def test_a_failure_after_the_model_answers_releases_the_lock(research_conn, comp
     assert research_conn.execute("SELECT count(*) FROM analysis_runs WHERE status = 'running'").fetchone()[0] == 0
     assert interpret.run(research_conn, company["company_id"]) is True  # retried, not blocked
     assert {c["schema"] for c in model.calls} == {"Extraction", "Synthesis"}  # the fake answered every call
+
+
+def test_an_overloaded_model_is_retried_before_falling_back(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    monkeypatch.setattr(llm, "OVERLOAD_WAITS", (0, 0))
+    attempts = []
+
+    def busy_twice(model, stage, system, contents, schema):
+        attempts.append(model)
+        if len(attempts) <= 2:
+            raise ProviderError(503, "This model is currently experiencing high demand. Please try again later.")
+        return llm.Result(interpret.Extraction.model_validate(extraction()), model, 10, 5)
+
+    monkeypatch.setattr(llm, "_gemini", busy_twice)
+    assert llm.generate("synthesize", "", "", interpret.Extraction).model == "gemini-3.8-flash"
+    assert attempts == ["gemini-3.8-flash"] * 3
+
+    # A spent quota is not retried, and preferred_only never falls back.
+    attempts.clear()
+    monkeypatch.setattr(llm, "_gemini", lambda m, *a: attempts.append(m) or (_ for _ in ()).throw(ProviderError(429, "quota")))
+    with pytest.raises(llm.ModelUnavailable):
+        llm.generate("synthesize", "", "", interpret.Extraction, preferred_only=True)
+    assert attempts == ["gemini-3.8-flash"]
+
+
+def synth_model(conn, company_id):
+    return conn.execute("SELECT model FROM model_outputs WHERE company_id = %s AND stage = 'synthesize'",
+                        (company_id,)).fetchone()[0]
+
+
+def test_the_daily_job_rewrites_a_summary_a_fallback_model_wrote(research_conn, company, model, monkeypatch):
+    monkeypatch.setattr(llm, "OVERLOAD_WAITS", ())
+    down = {"gemini-3.8-flash"}
+    real = llm._gemini
+
+    def flaky(name, *args):
+        if name in down:
+            raise ProviderError(503, "This model is currently experiencing high demand.")
+        return real(name, *args)
+
+    monkeypatch.setattr(llm, "_gemini", flaky)
+    company_id = company["company_id"]
+    interpret.run(research_conn, company_id)
+    assert synth_model(research_conn, company_id) == "gemini-3.5-flash-lite"
+
+    # Still overloaded: the fallback's summary stays and nothing is raised.
+    assert interpret.run(research_conn, company_id, upgrade=True) is False
+    assert synth_model(research_conn, company_id) == "gemini-3.5-flash-lite"
+
+    # A page request does not upgrade; the daily job does once the model answers.
+    down.clear()
+    assert interpret.run(research_conn, company_id) is False
+    assert interpret.run(research_conn, company_id, upgrade=True) is True
+    assert synth_model(research_conn, company_id) == "gemini-3.8-flash"
+    assert interpret.run(research_conn, company_id, upgrade=True) is False

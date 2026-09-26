@@ -234,7 +234,7 @@ def _interpret(conn, company_id: int) -> bool:
         print("  AI analysis skipped: no GEMINI_API_KEY or MISTRAL_API_KEY", flush=True)
         return True
     try:
-        produced = interpret.run(conn, company_id)
+        produced = interpret.run(conn, company_id, upgrade=True)
     except (llm.ModelUnavailable, interpret.Busy) as exc:
         print(f"  AI analysis not written: {exc}", flush=True)
         return isinstance(exc, interpret.Busy) or bool(getattr(exc, "quota", False))  # quota is not a job failure
