@@ -331,3 +331,44 @@ def test_derived_changes_use_the_latest_quarter_year_over_year():
     margin = records["Operating margin"]
     assert margin.change == pytest.approx(64 / 96 - 28.4 / 46.7)
     assert (margin.period_label, margin.base_period_label, margin.unit) == ("Q2 FY2027", "Q2 FY2026", "points")
+
+
+def test_an_amount_laid_out_on_its_own_line_stays_in_its_sentence():
+    """UBS positions each run of text separately, so a tagged amount lands on a line of its own; page numbers still go."""
+    text = ("The court ordered the former relationship manager to pay damages of approximately USD\n130\nm, a decision "
+            "upheld on appeal.\n14\nA separate paragraph begins after the page number and is long enough to count.")
+    assert narrative.sentences(text) == [
+        "The court ordered the former relationship manager to pay damages of approximately USD 130 m, a decision upheld "
+        "on appeal.", "A separate paragraph begins after the page number and is long enough to count."]
+
+
+FOREIGN = [
+    {"filing_id": 13, "accession_number": "h1", "form_type": "6-K", "filing_date": date(2026, 8, 20),
+     "period_end": date(2026, 6, 30), "fiscal_year": 2026, "fiscal_period": "Q2", "is_annual": False},
+    {"filing_id": 12, "accession_number": "fy25", "form_type": "20-F", "filing_date": date(2026, 3, 10),
+     "period_end": date(2025, 12, 31), "fiscal_year": 2025, "fiscal_period": "FY", "is_annual": True},
+    {"filing_id": 11, "accession_number": "fy24", "form_type": "20-F", "filing_date": date(2025, 3, 10),
+     "period_end": date(2024, 12, 31), "fiscal_year": 2024, "fiscal_period": "FY", "is_annual": True},
+]
+ADDED_RISK = "Litigation relating to the acquired bank could result in substantial losses and regulatory sanctions."
+
+
+def test_a_block_tagged_twice_is_read_once():
+    note = "Credit Suisse has received requests for documents from regulators in connection with investigations."
+    footnote = "Mainly includes provisions in relation to employee benefits, VAT and operational risks."
+    first = "The first provisions table shows the movements in provisions over the reporting period."
+    second = "The second provisions table shows the provisions held by each business division at period end."
+    sections = [section(12, "contingencies", f"{first}\n{second}", 1),
+                section(13, "contingencies", note, 2), {**section(13, "contingencies", note, 3), "ordinal": 2},
+                {**section(13, "contingencies", f"{first}\n{footnote}", 4), "ordinal": 3},
+                {**section(13, "contingencies", f"{second}\n{footnote}", 5), "ordinal": 4}]
+    records = changes.narrative_changes(sections, FOREIGN, changes.Bases.of(FOREIGN))
+    # The block tagged twice and the footnote under both tables each give one change.
+    assert sorted(r.text for r in records) == sorted([note, footnote])
+
+
+def test_annual_risk_changes_compare_the_last_two_annual_reports():
+    sections = [section(11, "risk_factors", BASE_RISK), section(12, "risk_factors", f"{BASE_RISK} {ADDED_RISK}")]
+    records = changes.annual_risk_changes([], sections, FOREIGN, metrics.Metrics([]), "USD")
+    assert [(r.change_type, r.text) for r in records] == [("new", ADDED_RISK)]
+    assert records[0].period_label == "FY2025" and records[0].base_period_label == "FY2024"

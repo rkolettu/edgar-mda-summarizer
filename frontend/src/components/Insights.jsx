@@ -97,6 +97,9 @@ export function QuotedList({ items, empty, badges }) {
   if (!items?.length) return <p className="px-5 py-4 text-sm text-muted sm:px-6">{empty}</p>
   return (
     <>
+      {visible.length === 0 && (
+        <p className="px-5 py-4 text-sm text-muted sm:px-6">Nothing here could be matched to the filing's text.</p>
+      )}
       <ul className="divide-y divide-line">
         {visible.map((item, i) => (
           <li key={i} className={`px-5 py-4 sm:px-6 ${item.status === 'unverified' ? 'opacity-55' : ''}`}>

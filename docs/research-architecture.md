@@ -62,7 +62,10 @@ without relying on note numbers or Item numbers. The same parser handles 10-K, 1
    `gemini-3.8-flash` (the current stable models; `GEMINI_EXTRACT_MODEL` and `GEMINI_SYNTH_MODEL` override them). A
    spent quota, a model the project cannot use, an overloaded model or malformed output moves to the next model:
    the stage's own, then `GEMINI_MODEL` (the legacy summary's model, which an existing project can use), then the other
-   stage's, then Mistral's free tier if `MISTRAL_API_KEY` is set. Groq's free tier caps tokens per minute too low for
+   stage's, then Mistral's free tier if `MISTRAL_API_KEY` is set. An overloaded model (503 "high demand", which Flash
+   returns in spikes) is retried twice, after 4 and 10 seconds, before falling back; a summary or omission check that
+   a fallback wrote anyway is written again on the stage's own model by the daily job (`ingest --interpret`), and
+   kept if that model still cannot answer. Groq's free tier caps tokens per minute too low for
    the extraction call; Cerebras now requires a card; most OpenRouter free models were withdrawn.
 5. **One snapshot payload per company** with every tab; source text loads on click.
 
@@ -396,6 +399,17 @@ Live runs on NVIDIA (10-Q), Microsoft (10-K), TSMC (20-F) and Suncor (40-F), wit
 - IFRS gaps closed: operating cash flow tagged as CashFlowsFromUsedInOperations (Suncor), capital expenditure as a
   negative company-specific cash flow (Canadian Natural), pretax income under a longer company name (Thomson Reuters,
   TD), trade and other receivables, continuing-operations EPS (Shell).
+- UBS files jointly with UBS AG, and the filing index links its 6-K under UBS AG's CIK; read under both URLs, every
+  text block was stored twice and each new passage showed twice in Filing Changes (parser version 6 addresses every
+  document under the filer's CIK). UBS also positions each run of text on its own, so a tagged amount sat on a line
+  by itself and was dropped as a page number ("damages of approximately USD m"); an amount after a currency code is
+  now joined to it first.
+- A half-year report is tagged as Q2; its filing, balances and six-month figures are labelled H1 like its columns. A
+  6-K has no risk factors, so for a company whose latest filing is one, the Risks tab compares the last two annual
+  reports' risk factors instead.
+- The frontend and the API come from the same deployment; a tab left open across a deploy read the new data with
+  the old code (bank rows in a non-bank layout). The API now sends the commit it runs as `X-App-Build`, and a page
+  built from a different commit reloads once.
 
 ## Operating it
 

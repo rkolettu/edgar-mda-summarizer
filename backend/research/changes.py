@@ -433,10 +433,15 @@ def _first_sentence(text: str, heading: str | None) -> str:
 
 
 def _section_texts(sections: list[dict]) -> dict[tuple[int, str], dict]:
-    """One text per filing and category (several notes can share a category), in document order."""
+    """One text per filing and category (several notes can share a category), in document order. A block tagged
+    twice with the same text is read once."""
     merged: dict[tuple[int, str], dict] = {}
+    seen: set[tuple[int, str, str]] = set()
     for s in sorted(sections, key=lambda s: (s["filing_id"], s["ordinal"])):
         slot = (s["filing_id"], s["category"])
+        if (*slot, s["text"]) in seen:
+            continue
+        seen.add((*slot, s["text"]))
         if slot in merged:
             merged[slot]["text"] += "\n\n" + s["text"]
         else:
@@ -444,13 +449,15 @@ def _section_texts(sections: list[dict]) -> dict[tuple[int, str], dict]:
     return merged
 
 
-def narrative_changes(sections: list[dict], filings: list[dict], bases: Bases) -> list[ChangeRecord]:
+def narrative_changes(sections: list[dict], filings: list[dict], bases: Bases,
+                      categories: tuple[str, ...] = NARRATIVE_CATEGORIES) -> list[ChangeRecord]:
     latest = bases.latest
     texts = _section_texts(sections)
     earlier = sorted((f for f in filings if not f["form_type"].endswith("/A") and f["period_end"]
                       and f["period_end"] < latest["period_end"]), key=lambda f: f["period_end"], reverse=True)
     records = []
-    for category in NARRATIVE_CATEGORIES:
+    seen: set[str] = set()
+    for category in categories:
         new = texts.get((latest["filing_id"], category))
         if not new:
             continue
@@ -478,6 +485,11 @@ def narrative_changes(sections: list[dict], filings: list[dict], bases: Bases) -
             else:
                 units = [passage]
             for unit in units:
+                if unit.text in seen:
+                    # A footnote repeated under two tables, or risk factors a 40-F takes from its MD&A: once, under
+                    # the first category.
+                    continue
+                seen.add(unit.text)
                 records.append(_narrative_record(unit, category, new, base_filing, carried, bases))
     return records
 
@@ -576,6 +588,22 @@ def compute(rows: list[dict], sections: list[dict], filings: list[dict], aliases
     records += language[:MAX_NARRATIVE]
     records.sort(key=lambda r: -r.score.score)
     return records
+
+
+def annual_risk_changes(rows: list[dict], sections: list[dict], filings: list[dict], m: metrics.Metrics,
+                        currency: str | None) -> list[ChangeRecord]:
+    """Risk factor wording the latest annual report changed against the one before, for a company whose latest
+    filing (a 6-K interim report) has no risk factors of its own."""
+    annual = [f for f in filings if f["is_annual"]]
+    bases = Bases.of(annual)
+    if bases is None or bases.previous is None:
+        return []
+    scale = anchors(m, rows, currency)
+    records = narrative_changes(sections, annual, bases, ("risk_factors",))
+    for record in records:
+        record.currency = currency
+        record.score = materiality.score(_candidate(record), scale)
+    return sorted((r for r in records if r.score.score >= NARRATIVE_FLOOR), key=lambda r: -r.score.score)[:MAX_NARRATIVE]
 
 
 def stems(text: str) -> set[str]:

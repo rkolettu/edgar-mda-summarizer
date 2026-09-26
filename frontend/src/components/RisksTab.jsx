@@ -45,20 +45,28 @@ function Ranked({ risks }) {
 const VISIBLE_CHANGES = 8
 
 // Risk factor language the latest filing added or changed, found by comparing the text in code.
-function WordingChanges({ changes }) {
+// A 6-K interim report has no risk factors, so for those companies the last two annual reports are compared instead.
+function WordingChanges({ changes, annual }) {
   const [expanded, setExpanded] = useState(false)
-  const all = (changes?.items ?? []).filter((i) => i.category === 'risk_factors')
+  const all = annual ? annual.items : (changes?.items ?? []).filter((i) => i.category === 'risk_factors')
   const items = expanded ? all : all.slice(0, VISIBLE_CHANGES)
-  const base = all[0]?.base_filing
+  const base = annual ? annual.base : all[0]?.base_filing
   return (
     <Card
       title="Risk factor wording that changed"
-      aside={base && <span className="text-xs text-muted">vs. the {base.fiscal_label} {base.form}</span>}
+      aside={base && (
+        <span className="text-xs text-muted">
+          {annual && `${annual.filing.fiscal_label} ${annual.filing.form} `}vs. the {base.fiscal_label} {base.form}
+        </span>
+      )}
       className="mb-5"
     >
+      {annual && <p className="border-b border-line px-5 py-3 text-xs text-muted sm:px-6">{annual.note}</p>}
       {all.length === 0 ? (
         <p className="px-5 py-4 text-sm text-muted sm:px-6">
-          No new or reworded risk factor language was found in the latest filing, or its risk factors could not be read.
+          {annual
+            ? 'No new or reworded risk factor language was found between the last two annual reports.'
+            : 'No new or reworded risk factor language was found in the latest filing, or its risk factors could not be read.'}
         </p>
       ) : (
         <ul className="divide-y divide-line">
@@ -92,7 +100,7 @@ function WordingChanges({ changes }) {
 }
 
 export default function RisksTab({ research, request }) {
-  const { insights, changes } = research
+  const { insights, changes, risk_wording: annualWording } = research
   const ranked = insights?.risks?.ranked ?? []
   const shown = new Set(ranked.map((r) => r.extracted?.headline).filter(Boolean))
   const others = (insights?.risks?.extracted ?? []).filter((r) => !shown.has(r.headline) && r.company_specific !== false)
@@ -104,7 +112,7 @@ export default function RisksTab({ research, request }) {
       </SectionHeader>
       <InsightsNotice insights={insights} request={request} />
       <Ranked risks={ranked} />
-      <WordingChanges changes={changes} />
+      <WordingChanges changes={changes} annual={annualWording} />
       {others.length > 0 && (
         <Card title="Other company-specific risks in the filings">
           <QuotedList items={others} empty="" badges={(item) => <RiskBadges trend={item.trend} extracted={item} />} />

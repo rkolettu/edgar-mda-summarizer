@@ -192,3 +192,21 @@ def test_history_pages_are_read_until_enough_annual_reports(monkeypatch):
     history = ingest.with_history(recent, annual=3)
     assert fetched == ["https://data.sec.gov/submissions/page-001.json"]
     assert [f["accession_number"] for f in ingest.discover(history, annual=3)] == ["annual23", "annual24", "annual25"]
+
+
+def test_a_joint_filing_links_its_document_under_the_co_registrant(monkeypatch):
+    """UBS Group AG files with UBS AG; the index links the report under UBS AG's CIK. Read under two URLs, every text
+    block was stored twice."""
+    from research import adapters
+    from tests.test_research_ingest import index_page
+    accession = "0001610520-26-000082"
+    _, html = index_page(1114446, accession, [("", "ubs-20260630.htm", "6-K", True)])
+
+    class Response:
+        text = html
+
+    monkeypatch.setattr(adapters.sec, "sec_get", lambda url: Response())
+    filing = {"accession_number": accession, "primary_doc": "ubs-20260630.htm", "form": "6-K"}
+    docs = adapters.list_documents(1610520, filing)
+    assert [(d.url, d.role) for d in docs] == [
+        ("https://www.sec.gov/Archives/edgar/data/1610520/000161052026000082/ubs-20260630.htm", "primary")]

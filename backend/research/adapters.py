@@ -70,7 +70,10 @@ def list_documents(cik: int, filing: dict, role: str | None = None) -> list[DocR
         href = (link.get("href", "") if link else "").replace("/ix?doc=", "")
         if not href.lower().endswith((".htm", ".html", ".xhtml")):
             continue
-        url = urljoin("https://www.sec.gov", href)
+        # A joint filing (UBS Group AG with UBS AG) can link its documents under a co-registrant's CIK; the same file
+        # under two URLs would be parsed twice, so every document is addressed under the filer's own CIK.
+        url = sec.archive_url(cik, accession, href.rsplit("/", 1)[-1]) if "/Archives/edgar/data/" in href \
+            else urljoin("https://www.sec.gov", href)
         doc_type = cells[3].get_text(strip=True)
         ixbrl = "ixbrl" in cells[2].get_text(" ", strip=True).lower() or "/ix?doc=" in (link.get("href", "") if link else "")
         size = cells[4].get_text(strip=True) if len(cells) > 4 else ""

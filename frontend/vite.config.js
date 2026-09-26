@@ -7,5 +7,9 @@ export default defineConfig(({ command, mode }) => {
     throw new Error('VITE_API_URL must point to the deployed backend before building the frontend.')
   }
 
-  return { plugins: [react(), tailwindcss()] }
+  return {
+    plugins: [react(), tailwindcss()],
+    // The commit being deployed (set by Vercel), compared with the API's X-App-Build header in src/lib/api.js.
+    define: { __APP_BUILD__: JSON.stringify(process.env.VERCEL_GIT_COMMIT_SHA || '') },
+  }
 })

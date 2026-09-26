@@ -539,10 +539,12 @@ class Busy(Exception):
     """Another worker is running a stage this request needs."""
 
 
-def run(conn: psycopg.Connection, company_id: int, force: bool = False) -> bool:
+def run(conn: psycopg.Connection, company_id: int, force: bool = False, upgrade: bool = False) -> bool:
     """Runs the stages the company is missing. Returns True when anything new was produced.
 
-    Raises llm.ModelUnavailable when no model can answer, and Busy when another worker holds a needed stage."""
+    With upgrade (the daily job), a summary or omission check that a fallback model wrote because the stage's own
+    model was overloaded or out of quota is written again on that model; if it still cannot answer, the fallback's
+    stays. Raises llm.ModelUnavailable when no model can answer, and Busy when another worker holds a needed stage."""
     from research import snapshot  # snapshot reads this module's outputs
 
     company = store.find_company(conn, company_id=company_id)
@@ -596,10 +598,13 @@ def run(conn: psycopg.Connection, company_id: int, force: bool = False) -> bool:
         outputs = stored_outputs(conn, company_id)
 
     latest = chosen[0]
-    if (latest["filing_id"], "synthesize") not in outputs or force:
+    rewritten = False
+    redo = {stage for stage in ("synthesize", "audit") if upgrade and _by_fallback(outputs.get((latest["filing_id"], stage)), stage)}
+    if (latest["filing_id"], "synthesize") not in outputs or force or "synthesize" in redo:
         if busy:
             raise Busy("An extraction for this company is already running.")
-        run_id = store.claim_stage(conn, latest["accession_number"], "synthesize", SYNTH_VERSION, force=force)
+        upgrading = "synthesize" in redo and not force
+        run_id = store.claim_stage(conn, latest["accession_number"], "synthesize", SYNTH_VERSION, force=force or upgrading)
         if run_id is None:
             raise Busy("A synthesis for this company is already running.")
         try:
@@ -607,7 +612,7 @@ def run(conn: psycopg.Connection, company_id: int, force: bool = False) -> bool:
             extractions = [(f, outputs[(f["filing_id"], "extract")]["output"]) for f in chosen
                            if (f["filing_id"], "extract") in outputs]
             source = synthesis_input(payload, extractions)
-            result = llm.generate("synthesize", SYNTH_PROMPT, source.text, Synthesis)
+            result = llm.generate("synthesize", SYNTH_PROMPT, source.text, Synthesis, preferred_only=upgrading)
             output = verify_synthesis(result.data, source, payload)
             with conn.transaction():
                 _save(conn, company_id, latest["filing_id"], "synthesize", SYNTH_VERSION, result.model, len(source.text), output)
@@ -618,13 +623,22 @@ def run(conn: psycopg.Connection, company_id: int, force: bool = False) -> bool:
                              "AND filing_id <> %s", (company_id, latest["filing_id"]))
         except Exception as exc:
             store.finish_stage(conn, run_id, "failed", filing_id=latest["filing_id"], error=str(exc)[:500])
-            raise
-        produced = True
+            if upgrading and isinstance(exc, llm.ModelUnavailable):
+                print(f"summary not upgraded, the earlier one stays: {exc}", flush=True)
+            else:
+                raise
+        else:
+            produced = True
+            if upgrading:
+                rewritten = True
+                redo.add("audit")  # the check reviews the summary, so a new summary needs a new check
         outputs = stored_outputs(conn, company_id)
 
-    if (latest["filing_id"], "synthesize") in outputs and ((latest["filing_id"], "audit") not in outputs or force):
+    if (latest["filing_id"], "synthesize") in outputs and ((latest["filing_id"], "audit") not in outputs or force or "audit" in redo):
+        # A check redone only to upgrade it is worth writing only on the check's own model.
+        preferred_only = "audit" in redo and not force and not rewritten
         try:
-            produced |= _run_audit(conn, company_id, filings, chosen, outputs, force)
+            produced |= _run_audit(conn, company_id, filings, chosen, outputs, force or "audit" in redo, preferred_only)
         except (llm.ModelUnavailable, Busy) as exc:
             # The summary stands without its check; the next request (or the daily job) runs the audit again.
             print(f"omission audit not run: {exc}", flush=True)
@@ -633,8 +647,14 @@ def run(conn: psycopg.Connection, company_id: int, force: bool = False) -> bool:
     return produced
 
 
+def _by_fallback(output: dict | None, stage: str) -> bool:
+    """Whether a stored output was written by a fallback model rather than the stage's own ("none" is an omission
+    check that needed no model)."""
+    return output is not None and output["model"] not in ("none", llm.preferred(stage))
+
+
 def _run_audit(conn: psycopg.Connection, company_id: int, filings: list[dict], chosen: list[dict], outputs: dict,
-               force: bool) -> bool:
+               force: bool, preferred_only: bool = False) -> bool:
     from research import audit, snapshot
 
     latest = chosen[0]
@@ -652,7 +672,7 @@ def _run_audit(conn: psycopg.Connection, company_id: int, filings: list[dict], c
         model, tokens, text = "none", (None, None), ""
         if open_items:
             text = audit.audit_input(payload, synth, open_items)
-            result = llm.generate("audit", audit.AUDIT_PROMPT, text, audit.Audit)
+            result = llm.generate("audit", audit.AUDIT_PROMPT, text, audit.Audit, preferred_only=preferred_only)
             output = audit.verify(result.data, text, payload, synth, items)
             model, tokens = result.model, (result.input_tokens, result.output_tokens)
         else:

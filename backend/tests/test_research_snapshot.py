@@ -282,3 +282,39 @@ def test_interim_note_explains_annual_only_foreign_issuers():
     assert note["annual_only"] and "Form 40-F" in note["note"] and "6-K" in note["note"]
     assert snapshot.interim_note("half_yearly", [{"form_type": "20-F"}])["label"] == "Half-yearly"
     assert snapshot.interim_note("quarterly", [{"form_type": "10-K"}]) == {"kind": "quarterly", "label": "Quarterly", "note": None}
+
+
+def test_a_total_tagged_under_two_members_is_listed_once():
+    def item(label, values):
+        series = [{"period_end": end, "value": v} for end, v in values]
+        return {"label": label, "unit": "currency", "currency": "USD", "series": series}
+    figures = [("2024-12-31", 9.5e9), ("2025-12-31", 7.4e9)]
+    items = [item("Credit enhancements: Classes of financial assets", figures),
+             item("Credit enhancements: Financial assets measured at amortised cost", figures),
+             item("Credit enhancements: Loans and advances to customers", [("2025-12-31", 7.3e9)]),
+             item("Credit enhancements: Financial assets at fair value", [("2024-12-31", 0.0), ("2025-12-31", 0.0)])]
+    assert [i["label"] for i in snapshot._distinct(items)] == [
+        "Credit enhancements: Classes of financial assets", "Credit enhancements: Loans and advances to customers"]
+
+
+def test_a_half_year_report_and_its_figures_are_labelled_h1():
+    filings = [{"is_annual": False, "fiscal_period": "Q2"}, {"is_annual": True, "fiscal_period": "FY"}]
+    rows = [{"fiscal_period": "Q2", "period_type": "instant", "period_months": None},
+            {"fiscal_period": "Q2", "period_type": "duration", "period_months": 6},
+            {"fiscal_period": "Q2", "period_type": "duration", "period_months": 3}]
+    snapshot._half_year_labels(filings, rows)
+    assert [f["fiscal_period"] for f in filings] == ["H1", "FY"]
+    assert [r["fiscal_period"] for r in rows] == ["H1", "H1", "Q2"]  # a three-month figure stays the quarter
+
+
+def test_risk_wording_compares_annual_reports_when_the_latest_filing_is_a_six_k():
+    from research import metrics
+    from tests.test_research_changes import ADDED_RISK, BASE_RISK, FOREIGN, section
+    filings = [{**f, "source_url": None} for f in FOREIGN]
+    sections = [section(11, "risk_factors", BASE_RISK), section(12, "risk_factors", f"{BASE_RISK} {ADDED_RISK}")]
+    wording = snapshot.risk_wording([], sections, filings, filings[0], metrics.Metrics([]), "USD")
+    assert (wording["filing"]["fiscal_label"], wording["base"]["fiscal_label"]) == ("FY2025", "FY2024")
+    assert [i["text"] for i in wording["items"]] == [ADDED_RISK] and "6-K interim report" in wording["note"]
+    # A filing with its own risk factors is covered by its own changes.
+    assert snapshot.risk_wording([], sections + [section(13, "risk_factors", BASE_RISK)], filings, filings[0],
+                                 metrics.Metrics([]), "USD") is None
