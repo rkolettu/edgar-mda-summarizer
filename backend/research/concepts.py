@@ -359,10 +359,14 @@ FAMILIES: list[Family] = [
     _family("non_operating", "non_operating_income",
             r"InvestmentIncomeInterest$|InterestExpenseNonoperating|ForeignCurrencyTransactionGainLoss|^FinanceIncome$"
             r"|^OtherGainsLosses$|OtherNonoperatingIncome$|OtherNonoperatingExpense$", axes=()),
+    # One-off gains too: a bargain purchase (UBS's negative goodwill on Credit Suisse, tagged by acquisition) and the
+    # gain on selling an associate (TD's Schwab stake, tagged as the cash flow statement's adjustment for it).
     _family("unusual_item", "unusual_item",
             r"Impairment|WriteDown|Writedown|Restructuring(Charges|AndRelatedCostIncurredCost)|LitigationSettlement"
-            r"|BusinessCombinationAcquisitionRelatedCosts|GainLossOnDispositionOfAssets|GainLossOnSaleOf",
-            axes={"RestructuringPlanAxis", "FinancialInstrumentAxis"}, exclude=r"Reversal|Recovery|Test"),
+            r"|BusinessCombinationAcquisitionRelatedCosts|GainLossOnDispositionOfAssets|GainLossOnSaleOf|BargainPurchase"
+            r"|GainLossOnDisposalOfInvestmentsInSubsidiaries|GainsLossesOnDisposalsOfInvestments(?:InSubsidiaries|$)",
+            axes={"RestructuringPlanAxis", "FinancialInstrumentAxis", "BusinessCombinationsAxis", "BusinessAcquisitionAxis"},
+            exclude=r"Reversal|Recovery|Test"),
     _family("customer_concentration", "customer_concentration", r"^ConcentrationRiskPercentage1$", axes=CONCENTRATION_AXES),
     _family("backlog", "operating_metric", r"^RevenueRemainingPerformanceObligation$", axes=()),
     _family("tax", "tax_item", r"^EffectiveIncomeTaxRateContinuingOperations$|^UnrecognizedTaxBenefits$", axes=()),
@@ -431,7 +435,7 @@ def humanize(qname: str, proper_name: bool = False) -> str:
 
 
 # Axes whose members name a party, so their capitalization is kept.
-PROPER_NAME_AXES = re.compile(r"Name|Counterparty|Investee|Acquiree|BusinessAcquisition")
+PROPER_NAME_AXES = re.compile(r"Name|Counterparty|Investee|Acquiree|BusinessAcquisition|BusinessCombination")
 
 
 # SEC country taxonomy members (country:TW) name places by ISO code.

@@ -4,6 +4,21 @@ from __future__ import annotations
 
 import re
 
+CURRENCY_PREFIX = {"USD": "$", "TWD": "NT$", "CAD": "C$", "HKD": "HK$", "AUD": "A$", "EUR": "€", "GBP": "£", "JPY": "¥"}
+
+
+def money(value: float | None, currency: str | None) -> str:
+    """'$27.7B', 'C$9.2B', 'CHF 1.2B'."""
+    if value is None:
+        return "n/a"
+    prefix = CURRENCY_PREFIX.get(currency or "", f"{currency} " if currency else "")
+    sign, amount = ("-" if value < 0 else ""), abs(value)
+    for scale, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
+        if amount >= scale:
+            return f"{sign}{prefix}{amount / scale:.1f}{suffix}"
+    return f"{sign}{prefix}{amount:,.0f}"
+
+
 FOOTNOTE = re.compile(r"(\s*(\([a-z0-9]{1,2}\)|\*+))+\s*$", re.IGNORECASE)
 GENERIC_LABEL = re.compile(r"^(total|subtotal|net|other|none)\b[\w\s,]{0,14}$", re.IGNORECASE)
 

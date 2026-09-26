@@ -1,6 +1,6 @@
 import { Analytics } from '@vercel/analytics/react'
-import { ArrowUpRight, ExternalLink, Info, TriangleAlert } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { ArrowLeft, ArrowUpRight, ExternalLink, Info, TriangleAlert } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import AnalysisSection from './components/AnalysisSection'
 import BusinessTab from './components/BusinessTab'
 import CapitalDeploymentChart from './components/CapitalDeploymentChart'
@@ -51,13 +51,19 @@ const SECTIONS = [
   { key: 'macro_risks', title: 'Macro risks' },
 ]
 
-function CompanyHeader({ data, subtitle }) {
+function CompanyHeader({ data, subtitle, onHome }) {
   const { filing } = data
 
   return (
     <div className="mb-9 border-b border-line pb-7">
       <div>
-        <div className="mb-3 text-[11px] font-semibold tracking-[0.14em] text-muted uppercase">Company research / {data.ticker}</div>
+        <nav aria-label="Breadcrumb" className="mb-3 flex items-center gap-2 text-[11px] font-semibold tracking-[0.14em] text-muted uppercase">
+          <button type="button" onClick={onHome} className="inline-flex items-center gap-1.5 text-accent uppercase hover:text-accent-hover">
+            <ArrowLeft size={13} aria-hidden /> All companies
+          </button>
+          <span aria-hidden>/</span>
+          <span>{data.ticker}</span>
+        </nav>
         <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
           <h1 className="break-words text-4xl leading-none font-semibold tracking-[-0.055em] text-ink sm:text-5xl">{data.company_name || data.ticker}</h1>
         </div>
@@ -153,7 +159,39 @@ function EmptyState({ onPick }) {
         <p className="text-ink-2"><span className="mr-3 font-mono text-xs text-muted">02</span> Changes in management's story</p>
         <p className="text-ink-2"><span className="mr-3 font-mono text-xs text-muted">03</span> Quotes from original filings</p>
       </div>
+      <AboutProject />
     </div>
+  )
+}
+
+// What to expect: how the figures are read, which AI writes the analysis, and what kind of project this is.
+function AboutProject() {
+  return (
+    <section aria-labelledby="about-heading" className="mb-6 rounded-2xl border border-line bg-panel px-6 py-6 sm:px-8 sm:py-7">
+      <h2 id="about-heading" className="mb-4 flex items-center gap-2 text-base font-semibold tracking-[-0.025em] text-ink">
+        <Info size={16} className="text-accent" aria-hidden /> A passion project, with some rough edges
+      </h2>
+      <div className="grid gap-5 text-sm leading-relaxed text-ink-2 md:grid-cols-3 md:gap-8">
+        <p>
+          <span className="font-semibold text-ink">Parsed, not hand-checked.</span> Figures are read by code from the
+          machine-readable tags in each filing, and every company tags a little differently. Some tables can look off: a
+          blank cell, an oddly worded label, a period that is missing. Where the tool can tell why, a note under the table
+          says so.
+        </p>
+        <p>
+          <span className="font-semibold text-ink">Foreign companies are the hardest.</span> Companies outside the US
+          file Forms 20-F, 40-F and 6-K, which follow looser rules than a US 10-K or 10-Q. Many report every six months, or
+          put out their quarterly results in untagged press releases. Their pages can have more gaps and quirks than a US
+          company's.
+        </p>
+        <p>
+          <span className="font-semibold text-ink">Written by free-tier AI.</span> The analysis runs on Google&apos;s
+          lightweight Gemini models at no cost. Every figure and quote is checked against the filings, but a more capable
+          model would write sharper, more complete analysis. This is a personal project, not a commercial product, so
+          treat it as a starting point and read the original filing before relying on anything here.
+        </p>
+      </div>
+    </section>
   )
 }
 
@@ -267,11 +305,30 @@ export default function App() {
     }
   }
 
-  async function runAnalysis(input) {
+  // Back to the landing page: from the logo, the breadcrumb or the browser's back button.
+  function goHome({ push = true } = {}) {
+    latestRequest.current += 1  // a company still loading no longer applies
+    setQuery('')
+    setActiveQuery('')
+    setTab('overview')
+    setResearch({ status: 'idle' })
+    setSummary({ status: 'idle' })
+    setInsightsRequest({ status: 'idle' })
+    if (push && window.location.search) window.history.pushState({}, '', window.location.pathname)
+    window.scrollTo(0, 0)
+  }
+
+  async function runAnalysis(input, { push = true } = {}) {
     const q = input.trim()
     if (!q || loading) return
     const request = ++latestRequest.current
     const current = () => request === latestRequest.current
+    // The company is in the address (?c=TD), so a link opens it and the back button returns to the landing page.
+    if (push && new URLSearchParams(window.location.search).get('c') !== q) {
+      window.history.pushState({}, '', `?c=${encodeURIComponent(q)}`)
+    }
+    // Opened from the address or the back button: the search box keeps no focus, so its suggestions stay closed.
+    if (!push) document.activeElement?.blur?.()
 
     setQuery(q)
     setActiveQuery(q)
@@ -294,6 +351,7 @@ export default function App() {
     const ticker = data.company?.ticker ?? q
     setResearch({ status: 'ready', data })
     setQuery(ticker)
+    if (ticker !== q) window.history.replaceState({}, '', `?c=${encodeURIComponent(ticker)}`)
 
     // The AI analysis is written once per filing and then stored; ask for it only when it is missing.
     // The omission check runs after the summary; a summary without it (a spent quota) asks again.
@@ -309,10 +367,26 @@ export default function App() {
     }
   }
 
+  // The latest handlers, for the listeners registered once below.
+  const navigation = useRef({})
+  useEffect(() => {
+    navigation.current = { runAnalysis, goHome }
+  })
+  useEffect(() => {
+    const open = () => {
+      const c = new URLSearchParams(window.location.search).get('c')
+      if (c) navigation.current.runAnalysis(c, { push: false })
+      else navigation.current.goHome({ push: false })
+    }
+    if (new URLSearchParams(window.location.search).get('c')) open()
+    window.addEventListener('popstate', open)
+    return () => window.removeEventListener('popstate', open)
+  }, [])
+
   const tabProps = { research: research.data, request: insightsRequest }
   return (
     <div className="flex min-h-screen flex-col bg-page">
-      <SearchHeader query={query} onQueryChange={setQuery} onSubmit={runAnalysis} loading={loading} />
+      <SearchHeader query={query} onQueryChange={setQuery} onSubmit={runAnalysis} loading={loading} onHome={goHome} />
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-10 sm:px-8 sm:py-12">
         {loading && (
@@ -328,7 +402,7 @@ export default function App() {
 
         {showPage && (
           <>
-            <CompanyHeader data={header.data} subtitle={header.subtitle} />
+            <CompanyHeader data={header.data} subtitle={header.subtitle} onHome={goHome} />
             {researchReady ? (
               <>
                 <Tabs tabs={TABS} active={tab} onChange={setTab} />
@@ -349,7 +423,7 @@ export default function App() {
       </main>
 
       <footer className="mx-auto flex w-full max-w-6xl flex-col justify-between gap-2 border-t border-line px-5 py-6 text-[11px] text-muted sm:flex-row sm:px-8">
-        <span>Source: SEC EDGAR · AI analysis: Google Gemini, checked against the filings</span>
+        <span>Source: SEC EDGAR · AI analysis: Google Gemini (free tier), checked against the filings · A personal project</span>
         <span>Research aid only. Review the original filing before making investment decisions.</span>
       </footer>
       <Analytics />

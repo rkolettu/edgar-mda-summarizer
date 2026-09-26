@@ -11,12 +11,12 @@ from datetime import date, datetime, timezone
 
 import psycopg
 
-from research import changes, concepts, interpret, metrics, store
+from research import changes, concepts, interpret, metrics, notes, store
 from research.extract import PARSER_VERSION
 from research.rows import fiscal_label, latest_by, reported_label, source
 
 # Bump when the payload's shape or meaning changes; stored snapshots at an older version are rebuilt on read.
-SNAPSHOT_VERSION = 6
+SNAPSHOT_VERSION = 7
 
 CAPITAL_SECTIONS = [
     ("commitment", "Commitments"),
@@ -324,6 +324,14 @@ def risk_wording(rows: list[dict], sections: list[dict], filings: list[dict], la
     }
 
 
+def _noted(table: dict, kind: str, m: metrics.Metrics, bank: bool, filings: list[dict], rows: list[dict],
+           company: dict) -> dict:
+    """A financial table with notes on its blank and unusual figures (research/notes.py)."""
+    notes.table_notes(table, notes.Context(m, kind, bank, filings, rows, company["reporting_currency"],
+                                           company.get("accounting_standard") == "ifrs"))
+    return table
+
+
 def _half_year_labels(filings: list[dict], rows: list[dict]) -> None:
     """A half-year report is tagged as the second quarter (there is no H1 fiscal period in the cover tags); it and
     its six-month figures and balances are labelled H1, like the half-year columns. Metrics has already read the
@@ -382,8 +390,8 @@ def build(conn: psycopg.Connection, company_id: int) -> tuple[dict, int | None, 
         "financials": {
             "currency": company["reporting_currency"],
             "profile": "bank" if bank else "general",
-            "annual": metrics.table(m, "annual", bank),
-            "quarterly": metrics.table(m, "quarterly", bank),
+            "annual": _noted(metrics.table(m, "annual", bank), "annual", m, bank, filings, rows, company),
+            "quarterly": _noted(metrics.table(m, "quarterly", bank), "quarterly", m, bank, filings, rows, company),
             "interim": interim_note(interim_kind, filings),
             "breakdowns": breakdowns(rows, alias_map, m),
         },
