@@ -10,22 +10,40 @@ const BRIDGE_ROWS = [
   ['income_tax', 'Income tax'],
   ['net_income', 'Net income'],
 ]
+// A bank earns from lending and fees, then pays for credit losses and its costs.
+const BANK_BRIDGE_ROWS = [
+  ['revenue', 'Total revenues'],
+  ['net_interest_income', 'of which net interest income'],
+  ['fee_income', 'of which net fee and commission income'],
+  ['credit_loss_expense', 'Credit loss expense'],
+  ['operating_expenses', 'Operating expenses'],
+  ['pretax_income', 'Income before taxes'],
+  ['income_tax', 'Income tax'],
+  ['net_income', 'Net income'],
+]
 
 function Bridge({ bridge, currency }) {
   const money = (v) => formatUnit(v, 'currency', currency)
+  const bank = bridge.kind === 'bank'
+  const rows = (bank ? BANK_BRIDGE_ROWS : BRIDGE_ROWS).filter(([key]) => !bank || bridge[key] != null)
   return (
-    <Card title={`Operating income to net income · ${bridge.label}`}>
+    <Card title={`${bank ? 'Revenue' : 'Operating income'} to net income · ${bridge.label}`}>
       <table className="w-full border-collapse text-sm">
         <caption className="sr-only">Earnings bridge for {bridge.label}</caption>
         <tbody>
-          {BRIDGE_ROWS.map(([key, label]) => (
+          {rows.map(([key, label]) => (
             <tr key={key} className={`border-t border-line/60 first:border-t-0 ${key === 'net_income' ? 'font-semibold' : ''}`}>
-              <th scope="row" className="px-5 py-2.5 text-left font-normal text-ink sm:px-6">{label}</th>
+              <th scope="row" className={`py-2.5 pr-5 text-left font-normal sm:pr-6 ${label.startsWith('of which') ? 'pl-9 text-ink-2 sm:pl-10' : 'pl-5 text-ink sm:pl-6'}`}>{label}</th>
               <td className="px-5 py-2.5 text-right font-mono text-ink tabular-nums sm:px-6">{bridge[key] == null ? '—' : money(bridge[key])}</td>
             </tr>
           ))}
         </tbody>
       </table>
+      {bank && bridge.cost_income_ratio != null && (
+        <p className="border-t border-line px-5 py-3 text-xs text-ink-2 sm:px-6">
+          Operating expenses are {formatPct(bridge.cost_income_ratio)} of total revenues (the cost/income ratio).
+        </p>
+      )}
       {bridge.non_operating_share_of_pretax != null && (
         <p className="border-t border-line px-5 py-3 text-xs text-ink-2 sm:px-6">
           Non-operating items are {formatPct(bridge.non_operating_share_of_pretax)} of income before taxes.
@@ -59,18 +77,31 @@ function Bridge({ bridge, currency }) {
   )
 }
 
-// Earnings against cash, year by year, from the stored statements.
-function CashConversion({ table, currency }) {
+const CASH_ROWS = [
+  ['net_income', 'Net income', 'currency'],
+  ['operating_cash_flow', 'Operating cash flow', 'currency'],
+  ['cash_conversion', 'Operating cash flow / net income', 'ratio'],
+  ['nonoperating_income', 'Non-operating income (expense)', 'currency'],
+]
+// A bank's operating cash flow moves with its lending and deposits, so its earnings are read through revenue mix and
+// credit costs instead.
+const BANK_ROWS = [
+  ['net_interest_income', 'Net interest income', 'currency'],
+  ['nii_share', 'Net interest income as % of revenue', 'ratio'],
+  ['credit_loss_expense', 'Credit loss expense', 'currency'],
+  ['credit_loss_rate', 'Credit loss expense / loans', 'ratio'],
+  ['cost_income_ratio', 'Cost/income ratio', 'ratio'],
+  ['net_income', 'Net income', 'currency'],
+  ['roe', 'Return on equity', 'ratio'],
+]
+
+// Earnings against cash (a bank: revenue mix and credit costs), year by year, from the stored statements.
+function CashConversion({ table, currency, bank }) {
   const get = (key) => table?.rows?.find((r) => r.key === key)
-  const rows = [
-    ['net_income', 'Net income', 'currency'],
-    ['operating_cash_flow', 'Operating cash flow', 'currency'],
-    ['cash_conversion', 'Operating cash flow / net income', 'ratio'],
-    ['nonoperating_income', 'Non-operating income (expense)', 'currency'],
-  ].map(([key, label, unit]) => ({ key, label, unit, row: get(key) })).filter((r) => r.row)
+  const rows = (bank ? BANK_ROWS : CASH_ROWS).map(([key, label, unit]) => ({ key, label, unit, row: get(key) })).filter((r) => r.row)
   if (!rows.length) return null
   return (
-    <Card title="Earnings and cash, by year">
+    <Card title={bank ? 'Revenue mix and credit costs, by year' : 'Earnings and cash, by year'}>
       <div className="relative overflow-x-auto">
         <table className="w-full min-w-[520px] border-collapse text-sm">
           <caption className="sr-only">Net income, operating cash flow and non-operating income by fiscal year</caption>
@@ -109,9 +140,10 @@ export default function EarningsTab({ research, request }) {
   return (
     <div>
       <SectionHeader eyebrow="Operating results versus everything else" title="Earnings quality" aside={<AiLabel insights={insights} />}>
-        How much of net income comes from the business itself, and how much from investment gains, interest and one-time items, and
-        whether cash from operations keeps up with reported earnings. The figures come from the filings&apos; tags; the explanation is
-        neutral and does not judge whether a change is good or bad.
+        {financials.profile === 'bank'
+          ? 'Where a bank\'s earnings come from (lending, fees, trading) and what they cost in credit losses and expenses. '
+          : 'How much of net income comes from the business itself, and how much from investment gains, interest and one-time items, and whether cash from operations keeps up with reported earnings. '}
+        The figures come from the filings&apos; tags; the explanation is neutral and does not judge whether a change is good or bad.
       </SectionHeader>
       <InsightsNotice insights={insights} request={request} />
       <div className="space-y-5">
@@ -130,7 +162,7 @@ export default function EarningsTab({ research, request }) {
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
           {(earnings?.bridges ?? []).map((b) => <Bridge key={b.label} bridge={b} currency={currency} />)}
         </div>
-        <CashConversion table={financials.annual} currency={currency} />
+        <CashConversion table={financials.annual} currency={currency} bank={financials.profile === 'bank'} />
         {quality && (
           <Card title="How the filings explain non-operating items">
             <QuotedList items={quality.explanations} empty="The filings read do not explain their non-operating items." />

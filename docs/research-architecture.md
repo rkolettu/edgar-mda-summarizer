@@ -237,12 +237,59 @@ turns); questions are capped at 500 characters and 10 a minute per visitor per s
 ## Filing-type adapters
 
 `backend/research/adapters.py` is the only layer that knows form types. Each adapter declares its forms, the
-categories a complete filing contains, and how to find narrative sections (reusing `sec.py`'s Item 7, 20-F operating
-review, 40-F exhibit and annual-report rules). Documents come from the filing index, where EDGAR marks inline XBRL
-documents; Suncor's 40-F keeps contexts in the primary document and facts in exhibit 99.2, and they are parsed as one
-set. Amendments use their base form's adapter and expect nothing (a 10-K/A may be only Part III). Planned: 6-K
-(untagged interim reports; text and table tiers) and 8-K (Item numbers map to fact types: 1.01 agreements, 2.01
-acquisitions, 2.03 debt or guarantees, 2.05/2.06 restructuring or impairment, 4.02 restatements, 1.05 cyber incidents).
+categories a complete filing contains, and how to find narrative sections. Documents come from the filing index, where
+EDGAR marks inline XBRL documents, and are fetched once per filing (`Files`). Amendments use their base form's adapter
+and expect nothing (a 10-K/A may be only Part III).
+
+| Form | Narrative | Tagged data |
+|---|---|---|
+| 10-K | Item 7 / Exhibit 13 / annual-report chapter (`sec.py`) | primary document |
+| 10-Q | Part I Item 2; for a 10-Q laid out like an annual report (JPMorgan), the sections its contents list under Item 2 | primary document |
+| 20-F | the Form 20-F cross-reference table resolved to page ranges (`reports.cross_referenced_sections`); Item headings otherwise (TSMC) | primary document and exhibits |
+| 40-F | the annual information form, MD&A and statements identified by title across the 40-F, its exhibits and a same-day 6-K (`reports.fortyf_sections`) | 40-F documents plus the companion 6-K |
+| 6-K | the MD&A of a tagged interim report, when it has one | only 6-Ks that carry inline XBRL are discovered |
+
+Planned: 8-K (Item numbers map to fact types: 1.01 agreements, 2.01 acquisitions, 2.03 debt or guarantees, 2.05/2.06
+restructuring or impairment, 4.02 restatements, 1.05 cyber incidents).
+
+## Foreign issuers and banks (phase 5)
+
+**Integrated annual reports (20-F).** UBS, HSBC, Shell and ASML file their annual report as the 20-F with a
+cross-reference table in front ("5.A Operating results: Financial review 64-110"). `reports.page_map` finds each
+printed page number next to a line that repeats on many pages (the running header or footer), and keeps the longest
+chain of rising numbers, which skips stray table numbers and a 20-F wrapper numbered on its own (a step may not skip
+far more text than its page count allows). The table's entries for Items 3.D, 4.B, 5.A, 5.D and 8.A/18 become page
+sets: risk factor pages are left out of the other sections, pages from the start of the financial statements on and
+governance or note references are left out of all; the operating review leads with its titled review chapter
+("Financial review", "Financial and operating performance"). A single cited page is extended over the pages whose title
+continues it ("Risk factors (continued)", ASML). Running headers and navigation bars are stripped from the text.
+
+**40-F document sets.** A 40-F carries the annual information form (AIF), the MD&A and the audited statements as
+numbered exhibits (Suncor, TD), in an annual report exhibit (Thomson Reuters, RBC), inside the 40-F itself (Canadian
+Natural), or in a 6-K furnished the same day (Canadian National, whose tagged statements are only there). Each document
+is split at title lines (letters squashed, so "Mana gement's" matches; glossary lines such as "AIF / Annual
+Information Form" are not titles), the MD&A title must be followed by the usual opening ("This MD&A ...", "should be
+read in conjunction"), and it runs to the statements. Business and risk factors come from the AIF's items; when the AIF
+only points to the MD&A for risks (the banks), the MD&A's risk section is used.
+
+**Discovery.** SEC's recent-filings list holds a thousand filings; a bank's note offerings push its annual reports off
+it, so older pages are read until enough annual reports are listed (RBC, TD, JPMorgan). 6-Ks are discovered only when
+they carry inline XBRL: those are tagged interim reports (Canadian banks each quarter; UBS, HSBC, Shell and Thomson
+Reuters each half year), or, filed within ten days of an annual report for the same period, that report's statements.
+A 6-K whose tags are only its cover page is recorded and skipped. Issuers whose interim results are untagged press
+releases (Suncor, Canadian Natural, TSMC, ASML) show annual figures only, and the Financials and Overview tabs say why.
+
+**Banks.** A company is read as a bank when customer deposits are 30% or more of total assets or net interest income is
+a quarter or more of revenue. Its table leads with total revenues, net interest income, fee income, credit loss
+expense, operating expenses, the cost/income ratio, return on equity (annualized for interim periods), loans and
+deposits; free cash flow, cash conversion and working-capital days are left out, and the earnings bridge runs from
+revenue through credit losses and expenses. Bank lines are mapped from standard concepts (IFRS
+RevenueAndOperatingIncome, InterestRevenueExpense, the IFRS 9 impairment line; US GAAP InterestIncomeExpenseNet,
+NoninterestExpense, ProvisionForLoanLeaseAndOtherLosses), company concepts that extend them in another case
+(TD's "NonInterestExpense1"), and statement row labels ("Provision for credit losses"). A bank's IFRS 9 exposure tables
+(loan commitments and financial guarantee contracts by credit grade, stage and portfolio) are grouped as credit
+exposure, keeping totals and single breakdowns; its balances are scored by how much they moved against total assets,
+and its operating cash flow and debt issuance are not reported as changes.
 
 ## Phases
 
@@ -252,7 +299,7 @@ acquisitions, 2.03 debt or guarantees, 2.05/2.06 restructuring or impairment, 4.
 | 2 Deterministic facts | Disclosure families (commitments, guarantees, debt, investments, capital return, non-operating and unusual items, customer concentration, backlog, taxes) and segment, geographic and product revenue; renamed-category linking; derived metrics and working capital; 5-year history from three annual reports; snapshot builder; on-demand `GET /api/research/{ticker}` with storage guard; tab frame, Financials tab, Capital & Commitments tab | **Done** |
 | 3 Compare and score | Comparison engine (previous report, annual report, year earlier), disclosure status, sentence fingerprints and narrative diffs, trigger phrases with modality, materiality scoring, grouping, `filing_changes`; Filing Changes tab | **Done** |
 | 4 Interpretation | Calls A and B, insights bound to fact ids, verification; Overview, Business & Strategy, Risks, Earnings Quality | **Done** |
-| 5 Audit and robustness | Call C, the omission audit (**done**); full-text and model fallbacks; 6-K, 8-K; messy-filer regression set | Audit done |
+| 5 Audit and robustness | Call C, the omission audit (**done**); foreign issuers: 20-F cross-reference tables, 40-F document sets, tagged 6-Ks (**done**); bank profile (**done**); full-text and model fallbacks; 8-K; untagged 6-K tables | Audit, foreign issuers and banks done |
 | 6 Polish | Source drill-downs; retire `/api/summarize` and the `analyses` cache | |
 
 ## Phase 1 findings
@@ -332,6 +379,23 @@ Live runs on NVIDIA (10-Q), Microsoft (10-K), TSMC (20-F) and Suncor (40-F), wit
   keys), so the snapshot's `configured` flag is set when it is served.
 - The page no longer calls the legacy `/api/summarize` for a company the research store can serve; it remains the
   fallback when the store is not configured or cannot read a company's filings (retired in phase 6).
+
+## Phase 5 findings (foreign issuers and banks)
+
+- Before this phase, UBS, HSBC, Shell and ASML stored no MD&A, risk factors or business description (the old
+  UBS-specific patterns stopped matching once sections kept their lines); all four now resolve through their
+  cross-reference tables. Of eleven foreign filers checked (UBS, HSBC, Shell, TSMC, ASML; RBC, TD, Suncor, Canadian
+  Natural, Canadian National, Thomson Reuters), every annual report now yields an MD&A, business description and
+  risk factors.
+- Canadian National's 40-F had no financial statements (0 facts): they are in a 6-K filed the same day; merging it
+  gives 270-odd facts a year.
+- Only one RBC and one TD 40-F were found before older filing pages were read; now three each, plus six tagged
+  quarterly 6-Ks. UBS, HSBC, Shell and Thomson Reuters gain half-year columns from their tagged interim reports.
+- UBS stored 399 "guarantee" items that were its IFRS 9 credit exposure tables; grouped as credit exposure with only
+  totals and single breakdowns, 27 remain, and they no longer outrank the year's results.
+- IFRS gaps closed: operating cash flow tagged as CashFlowsFromUsedInOperations (Suncor), capital expenditure as a
+  negative company-specific cash flow (Canadian Natural), pretax income under a longer company name (Thomson Reuters,
+  TD), trade and other receivables, continuing-operations EPS (Shell).
 
 ## Operating it
 

@@ -275,3 +275,10 @@ def test_snapshot_is_json_serializable_and_compact(payload):
     import json
 
     assert len(json.dumps(payload)) < 200_000
+
+
+def test_interim_note_explains_annual_only_foreign_issuers():
+    note = snapshot.interim_note(None, [{"form_type": "40-F"}, {"form_type": "40-F"}])
+    assert note["annual_only"] and "Form 40-F" in note["note"] and "6-K" in note["note"]
+    assert snapshot.interim_note("half_yearly", [{"form_type": "20-F"}])["label"] == "Half-yearly"
+    assert snapshot.interim_note("quarterly", [{"form_type": "10-K"}]) == {"kind": "quarterly", "label": "Quarterly", "note": None}

@@ -106,3 +106,42 @@ def test_net_cash_is_left_blank_when_a_reported_component_is_missing():
     assert metrics.column_values(m, 2025, "FY", "annual")["net_cash"].value == pytest.approx(34.7)
     # 2026 lacks marketable securities the company reported before: no misleading net debt.
     assert metrics.column_values(m, 2026, "FY", "annual")["net_cash"] is None
+
+
+def test_bank_profile_and_its_ratios():
+    rows = []
+    for fy, revenue, nii, credit, opex, net in ((2024, 57.0, 28.0, 3.2, 34.0, 16.0), (2025, 66.6, 33.0, 4.4, 36.6, 20.4)):
+        rows += spans("revenue", fy, FY=revenue) + spans("net_interest_income", fy, FY=nii) + spans("net_income", fy, FY=net)
+        rows += spans("credit_loss_expense", fy, FY=credit) + spans("operating_expenses", fy, FY=opex)
+    for fy, loans, deposits, assets, equity in ((2024, 1000.0, 1400.0, 2100.0, 127.0), (2025, 1050.0, 1515.0, 2325.0, 139.0)):
+        for metric, v in (("loans", loans), ("deposits", deposits), ("total_assets", assets), ("equity", equity)):
+            rows.append(fact(metric, fy, "FY", v, instant=True, start=None, end=date(fy, 12, 31)))
+    m = metrics.Metrics(rows)
+    assert m.is_bank()
+    table = metrics.table(m, "annual", bank=True)
+    values = {r["key"]: r["values"][-1]["v"] for r in table["rows"]}
+    assert values["cost_income_ratio"] == pytest.approx(36.6 / 66.6)
+    assert values["roe"] == pytest.approx(20.4 / ((139 + 127) / 2))
+    assert values["loans_to_deposits"] == pytest.approx(1050 / 1515)
+    assert values["credit_loss_rate"] == pytest.approx(4.4 / 1050)
+    assert "free_cash_flow" not in values and "gross_margin" not in values
+
+
+def test_an_industrial_company_with_a_net_interest_line_is_not_a_bank():
+    rows = spans("revenue", 2025, FY=100.0) + spans("net_interest_income", 2025, FY=2.0)
+    rows.append(fact("total_assets", 2025, "FY", 300.0, instant=True, start=None, end=date(2025, 12, 31)))
+    assert not metrics.Metrics(rows).is_bank()
+
+
+def test_half_year_reporters_get_half_year_columns():
+    m = metrics.Metrics(spans("revenue", 2025, H1=24.9, FY=49.6) + spans("revenue", 2026, H1=27.9)
+                        + [fact("equity", 2025, "Q2", 89.0, instant=True, start=None, end=date(2025, 6, 28))])
+    m.set_interim([{"form_type": "6-K", "is_annual": False, "fiscal_period": "Q2", "period_months": 6}])
+    assert m.interim_kind() == "half_yearly"
+    assert m.halves() == [(2025, "H1"), (2025, "H2"), (2026, "H1")]
+    assert (m.get("revenue", 2025, "H2").value, m.get("revenue", 2025, "H2").derived) == (pytest.approx(24.7), True)
+    # A balance at the end of the first half is the one at the end of the second quarter.
+    assert m.get("equity", 2025, "H1").value == 89.0
+    quarterly = metrics.Metrics(spans("revenue", 2026, Q1=10, Q2=12))
+    quarterly.set_interim([{"form_type": "6-K", "is_annual": False, "fiscal_period": "Q1", "period_months": 3}])
+    assert quarterly.interim_kind() == "quarterly"

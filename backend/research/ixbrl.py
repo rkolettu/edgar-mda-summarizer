@@ -465,3 +465,25 @@ def _same_value(a: float, a_decimals: int | None, b: float, b_decimals: int | No
     precision = min(d for d in (a_decimals, b_decimals, 10) if d is not None)
     tolerance = 0.5 * 10 ** -precision
     return abs(a - b) <= tolerance + 1e-9 * max(abs(a), abs(b))
+
+
+def merge(primary: IxbrlFiling, other: IxbrlFiling, prefix: str) -> IxbrlFiling:
+    """Adds another filing's facts and text blocks to primary: an annual report's financial statements furnished on
+    a 6-K the same day as the 40-F that incorporates them. The primary filing's cover page stays; element and block
+    ids from the other filing are prefixed, since ids are unique only within one filing."""
+    def rename(block_id: str | None) -> str | None:
+        return f"{prefix}:{block_id}" if block_id else None
+
+    offset = len(primary.text_blocks)
+    for block in other.text_blocks:
+        primary.text_blocks.append(TextBlock(rename(block.id), block.concept, block.context, block.document, block.text,
+                                             rename(block.parent_id), offset + block.ordinal))
+    for fact in other.facts:
+        fact.occurrences = [Occurrence(o.element_id, o.document, rename(o.text_block_id), o.row_text, o.row_label)
+                            for o in fact.occurrences]
+        primary.facts.append(fact)
+    for name, entry in other.dei.items():
+        primary.dei.setdefault(name, entry)
+    primary.documents.extend(other.documents)
+    primary.warnings.extend(other.warnings)
+    return primary

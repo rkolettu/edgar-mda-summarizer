@@ -22,7 +22,8 @@ from research.ixbrl import Fact, IxbrlFiling, Period, local_name
 # 2: disclosure families (commitments, guarantees, debt, ...) and segment breakdowns.
 # 3: country names for geographic members (country:TW -> Taiwan).
 # 4: narrative sections keep paragraphs as lines; business sections (10-K Item 1, 20-F Item 4).
-PARSER_VERSION = 4
+# 5: foreign issuers' sections (20-F cross-reference tables, 40-F document sets), bank lines, IFRS fallbacks.
+PARSER_VERSION = 5
 
 ANNUAL_FORMS = {"10-K", "10-KT", "20-F", "40-F"}
 YEAR_DAYS = 365.25
@@ -316,8 +317,11 @@ def _extension_candidates(metric: concepts.Metric, facts_by_concept: dict[str, l
         prefix, _, name = concept.partition(":")
         if prefix in ("us-gaap", "ifrs-full", "dei", "srt", "ecd"):
             continue
-        # A separator after the stem marks a variant; more CamelCase words make it a different concept.
-        if any(name.startswith(stem) and (len(name) == len(stem) or not name[len(stem)].isalpha()) for stem in stems):
+        # A separator after the stem marks a variant; more CamelCase words make it a different concept. Case is ignored
+        # (TD's "NonInterestExpense1" is US GAAP's NoninterestExpense).
+        lower = name.lower()
+        if any(lower.startswith(stem.lower()) and (len(name) == len(stem) or not name[len(stem)].isalpha()) for stem in stems) \
+                or (metric.extension and metric.extension.search(name)):
             found.append(concept)
     return found
 
@@ -378,6 +382,7 @@ def metric_concept_periods(records: list[FactRecord]) -> set[tuple[str, Period]]
 
 def _metric_record(metric, fact: Fact, period: Period, confidence: float, meta: FilingMeta, section_headings) -> FactRecord:
     fiscal_year, fiscal_period = meta.calendar.label(period) if meta.calendar else (None, None)
+    value = abs(fact.value) if metric.key in concepts.OUTFLOW_METRICS and fact.value is not None else fact.value
     return FactRecord(
         fact_key=metric.fact_key,
         fact_type="financial_metric",
@@ -392,7 +397,7 @@ def _metric_record(metric, fact: Fact, period: Period, confidence: float, meta: 
         reported_scale=fact.scale,
         reported_unit=fact.unit,
         reported_currency=currency_of(fact.unit),
-        value_normalized=fact.value,
+        value_normalized=value,
         normalized_unit=metric.unit,
         currency=currency_of(fact.unit),
         decimals=fact.decimals,

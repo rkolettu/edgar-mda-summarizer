@@ -51,16 +51,17 @@ class Metrics:
             self.types[metric] = row["period_type"]
 
     def get(self, metric: str, fiscal_year: int, period: str) -> Value | None:
-        """A metric for a fiscal year and period; discrete quarters of flows are derived from year-to-date values."""
+        """A metric for a fiscal year and period; discrete quarters and second halves of flows are derived from
+        year-to-date values. A balance at the end of a half is the one at the end of its second or fourth quarter."""
         values = self.values.get(metric, {})
         instant = self.types.get(metric) == "instant"
-        if instant and period == "Q4":
-            period = "FY"
+        if instant:
+            period = {"Q4": "FY", "H2": "FY", "H1": "Q2"}.get(period, period)
         if (fiscal_year, period) in values:
             return values[(fiscal_year, period)]
-        if instant or metric in NOT_DERIVABLE or period not in ("Q2", "Q3", "Q4"):
+        if instant or metric in NOT_DERIVABLE or period not in ("Q2", "Q3", "Q4", "H2"):
             return None
-        whole, part = {"Q2": ("H1", "Q1"), "Q3": ("9M", "H1"), "Q4": ("FY", "9M")}[period]
+        whole, part = {"Q2": ("H1", "Q1"), "Q3": ("9M", "H1"), "Q4": ("FY", "9M"), "H2": ("FY", "H1")}[period]
         total, earlier = values.get((fiscal_year, whole)), values.get((fiscal_year, part))
         if total is None or earlier is None:
             return None
@@ -76,6 +77,42 @@ class Metrics:
             if any(self.get(metric, fy, f"Q{n}") for metric in ANCHORS)
         ]
         return found
+
+    def halves(self) -> list[tuple[int, str]]:
+        """Half-year periods, for issuers that report interim results twice a year (UBS, HSBC, Shell on Form 6-K)."""
+        years = sorted({fy for metric in ANCHORS for (fy, _) in self.values.get(metric, {})})
+        return [(fy, h) for fy in years for h in ("H1", "H2") if any(self.get(metric, fy, h) for metric in ANCHORS)]
+
+    # Set from the filings (set_interim): whether interim reports come by quarter or by half year.
+    interim: str | None = None
+
+    def set_interim(self, filings: list[dict]) -> None:
+        """quarterly when any interim report is a 10-Q or covers three months (a Canadian bank's quarterly 6-K);
+        half_yearly when the only interim reports are half-year 6-Ks (UBS, HSBC, Shell)."""
+        interim = [f for f in filings if not f["is_annual"]]
+        if any(f["form_type"].startswith("10-Q") or f.get("period_months") == 3 or f["fiscal_period"] in ("Q1", "Q3")
+               for f in interim):
+            self.interim = "quarterly"
+        elif interim:
+            self.interim = "half_yearly"
+
+    def interim_kind(self) -> str | None:
+        if self.interim == "half_yearly" and self.halves():
+            return "half_yearly"
+        return "quarterly" if self.quarters() else ("half_yearly" if self.halves() else None)
+
+    def is_bank(self) -> bool:
+        """A deposit-taking bank: customer deposits of 30% or more of total assets at the latest year end, or net
+        interest income of a quarter or more of revenue (an industrial company's net interest is a sliver)."""
+        years = self.fiscal_years()
+        if not years:
+            return False
+        fy = years[-1]
+        deposits, assets = self.get("deposits", fy, "FY"), self.get("total_assets", fy, "FY")
+        if deposits and assets and assets.value and deposits.value / assets.value >= 0.3:
+            return True
+        nii, revenue = self.get("net_interest_income", fy, "FY"), self.get("revenue", fy, "FY")
+        return bool(nii and revenue and revenue.value and nii.value / revenue.value >= 0.25)
 
 
 def _ratio(a: Value | None, b: Value | None) -> Value | None:
@@ -148,6 +185,86 @@ ROWS = [
 ]
 
 
+# Banks: revenue mix, credit losses and efficiency instead of gross margin, free cash flow and working capital.
+BANK_ROWS = [
+    ("revenue", "Total revenues", "Income statement", "currency"),
+    ("revenue_growth", "Revenue growth (YoY)", "Income statement", "ratio"),
+    ("net_interest_income", "Net interest income", "Income statement", "currency"),
+    ("nii_share", "Net interest income as % of revenue", "Income statement", "ratio"),
+    ("fee_income", "Net fee and commission income", "Income statement", "currency"),
+    ("noninterest_income", "Non-interest income", "Income statement", "currency"),
+    ("credit_loss_expense", "Credit loss expense", "Income statement", "currency"),
+    ("operating_expenses", "Operating expenses", "Income statement", "currency"),
+    ("cost_income_ratio", "Cost/income ratio", "Income statement", "ratio"),
+    ("pretax_income", "Income before taxes", "Income statement", "currency"),
+    ("effective_tax_rate", "Effective tax rate", "Income statement", "ratio"),
+    ("net_income", "Net income", "Income statement", "currency"),
+    ("net_margin", "Net margin", "Income statement", "ratio"),
+    ("eps_diluted", "Diluted EPS", "Income statement", "currency_per_share"),
+    ("eps_growth", "Diluted EPS growth (YoY)", "Income statement", "ratio"),
+    ("buybacks", "Share repurchases", "Capital return", "currency"),
+    ("dividends_paid", "Dividends paid", "Capital return", "currency"),
+    ("loans", "Loans", "Balance sheet", "currency"),
+    ("deposits", "Deposits", "Balance sheet", "currency"),
+    ("loans_to_deposits", "Loans / deposits", "Balance sheet", "ratio"),
+    ("credit_loss_rate", "Credit loss expense / loans", "Balance sheet", "ratio"),
+    ("total_assets", "Total assets", "Balance sheet", "currency"),
+    ("equity", "Shareholders' equity", "Balance sheet", "currency"),
+    ("roe", "Return on equity", "Balance sheet", "ratio"),
+]
+# Flows over a quarter or half are annualized for return on equity and the credit loss rate.
+ANNUALIZE = {"FY": 1, "H1": 2, "H2": 2, "Q1": 4, "Q2": 4, "Q3": 4, "Q4": 4}
+PREVIOUS = {"FY": None, "H1": ("FY", -1), "H2": ("H1", 0), "Q1": ("FY", -1), "Q2": ("Q1", 0), "Q3": ("Q2", 0), "Q4": ("Q3", 0)}
+
+
+def _average(m: Metrics, metric: str, fiscal_year: int, period: str) -> Value | None:
+    """The average of a balance over a period: its opening (the previous period's close) and closing values."""
+    closing = m.get(metric, fiscal_year, period)
+    previous = PREVIOUS.get(period)
+    opening = m.get(metric, fiscal_year - 1, "FY") if period == "FY" else (
+        m.get(metric, fiscal_year + previous[1], previous[0]) if previous else None)
+    if closing is None:
+        return None
+    if opening is None:
+        return closing
+    return Value((closing.value + opening.value) / 2, derived=True)
+
+
+def bank_column_values(m: Metrics, fiscal_year: int, period: str, kind: str) -> dict[str, Value | None]:
+    get = lambda metric, fy=fiscal_year: m.get(metric, fy, period)  # noqa: E731
+    revenue, net = get("revenue"), get("net_income")
+    scale = ANNUALIZE.get(period, 1)
+    equity = _average(m, "equity", fiscal_year, period)
+    credit = get("credit_loss_expense")
+    return {
+        "revenue": revenue,
+        "revenue_growth": _growth(revenue, get("revenue", fiscal_year - 1)),
+        "net_interest_income": get("net_interest_income"),
+        "nii_share": _ratio(get("net_interest_income"), revenue),
+        "fee_income": get("fee_income"),
+        "noninterest_income": get("noninterest_income"),
+        "credit_loss_expense": credit,
+        "operating_expenses": get("operating_expenses"),
+        "cost_income_ratio": _ratio(get("operating_expenses"), revenue),
+        "pretax_income": get("pretax_income"),
+        "effective_tax_rate": _ratio(get("income_tax"), get("pretax_income")),
+        "net_income": net,
+        "net_margin": _ratio(net, revenue),
+        "eps_diluted": get("eps_diluted"),
+        "eps_growth": _growth(get("eps_diluted"), get("eps_diluted", fiscal_year - 1)),
+        "buybacks": get("buybacks"),
+        "dividends_paid": get("dividends_paid"),
+        "loans": get("loans"),
+        "deposits": get("deposits"),
+        "loans_to_deposits": _ratio(get("loans"), get("deposits")),
+        "credit_loss_rate": Value(credit.value * scale / get("loans").value, derived=True)
+        if credit and get("loans") and get("loans").value else None,
+        "total_assets": get("total_assets"),
+        "equity": get("equity"),
+        "roe": Value(net.value * scale / equity.value, derived=True) if net and equity and equity.value else None,
+    }
+
+
 def column_values(m: Metrics, fiscal_year: int, period: str, kind: str) -> dict[str, Value | None]:
     """Every row's value for one column. Growth compares with the same period a year earlier."""
     get = lambda metric, fy=fiscal_year: m.get(metric, fy, period)  # noqa: E731
@@ -206,18 +323,38 @@ def column_values(m: Metrics, fiscal_year: int, period: str, kind: str) -> dict[
     }
 
 
-def table(m: Metrics, kind: str) -> dict:
+def table(m: Metrics, kind: str, bank: bool = False) -> dict:
+    """kind is annual or quarterly; the quarterly table holds half years for issuers that report by half year."""
     if kind == "annual":
         columns = [(fy, "FY") for fy in m.fiscal_years()[-ANNUAL_COLUMNS:]]
+    elif m.interim_kind() == "half_yearly":
+        columns = m.halves()[-QUARTER_COLUMNS:]
     else:
         columns = m.quarters()[-QUARTER_COLUMNS:]
-    values = [column_values(m, fy, period, kind) for fy, period in columns]
+    compute, layout = (bank_column_values, BANK_ROWS) if bank else (column_values, ROWS)
+    values = [compute(m, fy, period, kind) for fy, period in columns]
     rows = []
-    for key, label, group, unit in ROWS:
+    for key, label, group, unit in layout:
         cells = [v[key].as_json() if v[key] is not None else None for v in values]
         if any(cells):
             rows.append({"key": key, "label": label, "group": group, "unit": unit, "values": cells})
     return {"columns": [{"fiscal_year": fy, "fiscal_period": period} for fy, period in columns], "rows": rows}
+
+
+def bank_bridge(m: Metrics, fiscal_year: int, period: str) -> dict | None:
+    """Revenue to net income for a bank: credit losses and operating expenses, then tax."""
+    get = lambda metric: m.get(metric, fiscal_year, period)  # noqa: E731
+    revenue, net = get("revenue"), get("net_income")
+    if revenue is None or net is None:
+        return None
+    values = {k: get(k) for k in ("net_interest_income", "fee_income", "noninterest_income", "credit_loss_expense",
+                                  "operating_expenses", "pretax_income", "income_tax")}
+    return {
+        "kind": "bank", "fiscal_year": fiscal_year, "fiscal_period": period, "revenue": revenue.value,
+        **{k: v.value if v else None for k, v in values.items()}, "net_income": net.value,
+        "cost_income_ratio": values["operating_expenses"].value / revenue.value
+        if values["operating_expenses"] and revenue.value else None,
+    }
 
 
 def earnings_bridge(m: Metrics, fiscal_year: int, period: str) -> dict | None:

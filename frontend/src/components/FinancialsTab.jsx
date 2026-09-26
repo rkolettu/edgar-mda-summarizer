@@ -1,3 +1,4 @@
+import { Info } from 'lucide-react'
 import { useState } from 'react'
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { AXIS_TICK, CHART_CHROME, SERIES } from '../lib/colors'
@@ -5,15 +6,14 @@ import { formatMoney, formatPct, formatSignedPct, formatUnit, periodLabel } from
 import { ChartCard, EmptyChart } from './ChartCard'
 import { Legend, SeriesTooltip } from './TrendCharts'
 
-const VIEWS = [
-  { key: 'annual', label: 'Annual' },
-  { key: 'quarterly', label: 'Quarterly' },
-]
-
-function Segmented({ value, onChange }) {
+function Segmented({ value, onChange, interimLabel }) {
+  const views = [
+    { key: 'annual', label: 'Annual' },
+    { key: 'quarterly', label: interimLabel ?? 'Quarterly' },
+  ]
   return (
     <div role="radiogroup" aria-label="Period" className="inline-flex rounded-lg border border-line bg-panel p-0.5">
-      {VIEWS.map((view) => (
+      {views.map((view) => (
         <button
           key={view.key}
           type="button"
@@ -37,18 +37,20 @@ function seriesRows(table, keys) {
   }))
 }
 
-export function RevenueCashChart({ table, currency }) {
+// A bank's revenue is set against its net income; free cash flow means little for a lender.
+export function RevenueCashChart({ table, currency, profile }) {
+  const bank = profile === 'bank'
   const series = [
-    { key: 'revenue', label: 'Revenue', color: SERIES.blue },
-    { key: 'free_cash_flow', label: 'Free cash flow', color: SERIES.aqua },
+    { key: 'revenue', label: bank ? 'Total revenues' : 'Revenue', color: SERIES.blue },
+    bank ? { key: 'net_income', label: 'Net income', color: SERIES.aqua } : { key: 'free_cash_flow', label: 'Free cash flow', color: SERIES.aqua },
   ]
   const rows = seriesRows(table, series.map((s) => s.key))
   const present = series.filter((s) => rows.some((r) => r[s.key] != null))
   const money = (v) => formatMoney(v, currency)
   return (
-    <ChartCard title="Revenue & free cash flow" subtitle={`${rows.length} periods · ${currency}`}>
+    <ChartCard title={bank ? 'Revenue & net income' : 'Revenue & free cash flow'} subtitle={`${rows.length} periods · ${currency}`}>
       {present.length === 0 ? (
-        <EmptyChart message="No revenue or cash flow reported" />
+        <EmptyChart message={bank ? 'No revenue or net income reported' : 'No revenue or cash flow reported'} />
       ) : (
         <>
           <Legend series={present} />
@@ -72,16 +74,23 @@ export function RevenueCashChart({ table, currency }) {
   )
 }
 
-export function MarginChart({ table }) {
-  const series = [
-    { key: 'gross_margin', label: 'Gross', color: SERIES.blue },
-    { key: 'operating_margin', label: 'Operating', color: SERIES.orange },
-    { key: 'net_margin', label: 'Net', color: SERIES.aqua },
-  ]
+export function MarginChart({ table, profile }) {
+  const bank = profile === 'bank'
+  const series = bank
+    ? [
+        { key: 'cost_income_ratio', label: 'Cost/income', color: SERIES.blue },
+        { key: 'net_margin', label: 'Net margin', color: SERIES.aqua },
+        { key: 'roe', label: 'Return on equity', color: SERIES.orange },
+      ]
+    : [
+        { key: 'gross_margin', label: 'Gross', color: SERIES.blue },
+        { key: 'operating_margin', label: 'Operating', color: SERIES.orange },
+        { key: 'net_margin', label: 'Net', color: SERIES.aqua },
+      ]
   const rows = seriesRows(table, series.map((s) => s.key))
   const present = series.filter((s) => rows.some((r) => r[s.key] != null))
   return (
-    <ChartCard title="Margins" subtitle={`${rows.length} periods`}>
+    <ChartCard title={bank ? 'Efficiency and returns' : 'Margins'} subtitle={`${rows.length} periods`}>
       {present.length === 0 ? (
         <EmptyChart message="Margins need reported revenue" />
       ) : (
@@ -128,7 +137,7 @@ function Cell({ cell, unit, currency }) {
   )
 }
 
-function FinancialTable({ table, currency }) {
+function FinancialTable({ table, currency, profile, halfYears }) {
   const groups = []
   for (const row of table.rows) {
     if (groups.at(-1)?.name !== row.group) groups.push({ name: row.group, rows: [] })
@@ -177,8 +186,11 @@ function FinancialTable({ table, currency }) {
       </div>
       <footer className="border-t border-line px-5 py-3 text-[11px] leading-relaxed text-muted sm:px-6">
         From the company's XBRL-tagged filings, in {currency}; restated figures replace earlier ones. * Calculated from reported
-        figures: free cash flow is operating cash flow minus capital expenditures, and quarters not reported on their own are
-        year-to-date totals minus earlier quarters. Growth compares the same period a year earlier.
+        figures: {profile === 'bank'
+          ? 'the cost/income ratio is operating expenses over total revenues, and return on equity is net income over average shareholders\' equity (annualized for interim periods);'
+          : 'free cash flow is operating cash flow minus capital expenditures;'}{' '}
+        {halfYears ? 'second halves are full-year totals minus the first half.' : 'quarters not reported on their own are year-to-date totals minus earlier quarters.'}{' '}
+        Growth compares the same period a year earlier.
       </footer>
     </section>
   )
@@ -229,12 +241,24 @@ function Breakdowns({ breakdowns, view, currency }) {
   )
 }
 
+// Why a company has no interim figures (a foreign issuer's interim reports are untagged 6-K press releases).
+export function InterimNote({ interim }) {
+  if (!interim?.note || interim.kind === 'quarterly') return null
+  return (
+    <p className="mb-6 flex items-start gap-2 rounded-xl border border-line bg-panel px-5 py-4 text-sm leading-relaxed text-ink-2" role="note">
+      <Info size={15} className="mt-0.5 shrink-0 text-muted" aria-hidden />
+      {interim.note}
+    </p>
+  )
+}
+
 export default function FinancialsTab({ research }) {
   const [view, setView] = useState('annual')
   const { financials } = research
   const currency = financials.currency ?? 'USD'
   const table = financials[view]
   const empty = !table?.rows?.length
+  const interim = financials.interim
 
   return (
     <div>
@@ -243,19 +267,23 @@ export default function FinancialsTab({ research }) {
           <p className="mb-1 text-[11px] font-semibold tracking-[0.14em] text-muted uppercase">Reported financials</p>
           <h2 className="text-2xl font-semibold tracking-[-0.04em] text-ink">Financial trends</h2>
         </div>
-        <Segmented value={view} onChange={setView} />
+        <Segmented value={view} onChange={setView} interimLabel={interim?.label} />
       </div>
+      {(view === 'quarterly' || interim?.annual_only) && <InterimNote interim={interim} />}
       {empty ? (
-        <p className="rounded-xl border border-line bg-panel px-5 py-5 text-sm text-muted">
-          No {view} figures are tagged in this company's stored filings.
-        </p>
+        !(view === 'quarterly' && interim?.annual_only) && (
+          <p className="rounded-xl border border-line bg-panel px-5 py-5 text-sm text-muted">
+            No {view === 'annual' ? 'annual' : (interim?.label ?? 'quarterly').toLowerCase()} figures are tagged in this company&apos;s stored filings.
+          </p>
+        )
       ) : (
         <>
           <div className="mb-8 grid grid-cols-1 gap-5 lg:grid-cols-2">
-            <RevenueCashChart table={table} currency={currency} />
-            <MarginChart table={table} />
+            <RevenueCashChart table={table} currency={currency} profile={financials.profile} />
+            <MarginChart table={table} profile={financials.profile} />
           </div>
-          <FinancialTable table={table} currency={currency} />
+          <FinancialTable table={table} currency={currency} profile={financials.profile}
+            halfYears={view === 'quarterly' && interim?.kind === 'half_yearly'} />
           <Breakdowns breakdowns={financials.breakdowns ?? []} view={view} currency={currency} />
         </>
       )}

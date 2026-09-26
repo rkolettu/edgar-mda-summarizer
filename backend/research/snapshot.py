@@ -16,11 +16,12 @@ from research.extract import PARSER_VERSION
 from research.rows import fiscal_label, latest_by, reported_label, source
 
 # Bump when the payload's shape or meaning changes; stored snapshots at an older version are rebuilt on read.
-SNAPSHOT_VERSION = 3
+SNAPSHOT_VERSION = 4
 
 CAPITAL_SECTIONS = [
     ("commitment", "Commitments"),
     ("guarantee", "Guarantees and credit support"),
+    ("credit_exposure", "Credit exposure (loan commitments and financial guarantees)"),
     ("debt", "Debt and financing"),
     ("investment", "Investments"),
     ("capital_return", "Capital return"),
@@ -147,7 +148,8 @@ def breakdowns(rows: list[dict], aliases: dict[str, str], m: metrics.Metrics) ->
             continue
         best = latest_by(family_rows, lambda r: (aliases.get(r["fact_key"], r["fact_key"]), r["fiscal_year"], r["fiscal_period"]))
         views = {}
-        for kind, periods in (("annual", ("FY",)), ("quarterly", ("Q1", "Q2", "Q3", "Q4"))):
+        interim = ("H1", "H2") if m.interim_kind() == "half_yearly" else ("Q1", "Q2", "Q3", "Q4")
+        for kind, periods in (("annual", ("FY",)), ("quarterly", interim)):
             candidates = [(fy, fp) for (_, fy, fp) in best if fp in periods and fy is not None]
             if not candidates:
                 continue
@@ -171,11 +173,12 @@ def breakdowns(rows: list[dict], aliases: dict[str, str], m: metrics.Metrics) ->
     return out
 
 
-def earnings_quality(rows: list[dict], m: metrics.Metrics, periods: list[tuple[int, str]]) -> list[dict]:
-    """The operating-to-net-income bridge per period, with the investment gains and unusual items reported for it."""
+def earnings_quality(rows: list[dict], m: metrics.Metrics, periods: list[tuple[int, str]], bank: bool = False) -> list[dict]:
+    """The operating-to-net-income bridge per period (revenue, credit losses and expenses for a bank), with the
+    investment gains and unusual items reported for it."""
     out = []
     for fiscal_year, period in periods:
-        bridge = metrics.earnings_bridge(m, fiscal_year, period)
+        bridge = (metrics.bank_bridge if bank else metrics.earnings_bridge)(m, fiscal_year, period)
         if bridge is None:
             continue
         items = latest_by(
@@ -194,6 +197,27 @@ def earnings_quality(rows: list[dict], m: metrics.Metrics, periods: list[tuple[i
     return out
 
 
+FOREIGN_ANNUAL_FORMS = {"20-F", "40-F"}
+
+
+def interim_note(kind: str | None, filings: list[dict]) -> dict:
+    """What the interim view holds (quarters or half years) and, when there is nothing to show, why."""
+    label = "Half-yearly" if kind == "half_yearly" else "Quarterly"
+    if kind:
+        note = ("Interim figures come from the half-year reports the company furnishes on Form 6-K with tagged financial "
+                "statements." if kind == "half_yearly" else None)
+        return {"kind": kind, "label": label, "note": note}
+    forms = {f["form_type"].removesuffix("/A") for f in filings}
+    if forms & FOREIGN_ANNUAL_FORMS:
+        form = sorted(forms & FOREIGN_ANNUAL_FORMS)[0]
+        note = (f"Only annual figures are shown. As a foreign private issuer filing Form {form}, the company is not "
+                "required to file quarterly reports with the SEC; it furnishes its interim results on Form 6-K as press "
+                "releases and reports whose figures are not tagged in machine-readable form, so they are not read here. "
+                "The annual figures come from the tagged financial statements in its annual reports.")
+        return {"kind": None, "label": label, "note": note, "annual_only": True}
+    return {"kind": None, "label": label, "note": "No quarterly figures are tagged in this company's stored filings."}
+
+
 def _filing_ref(filing: dict | None) -> dict | None:
     if filing is None:
         return None
@@ -202,8 +226,20 @@ def _filing_ref(filing: dict | None) -> dict | None:
             "period_end": _iso(filing["period_end"]), "filing_date": _iso(filing["filing_date"])}
 
 
+def _base_filing(r: changes.ChangeRecord, by_id: dict[int, dict]) -> dict | None:
+    """The report for the period compared with. The base value is often read from the latest filing's own comparative
+    column (a 20-F repeats last year's figures), which is not the report the change is measured against."""
+    if r.base_period_label:
+        match = [f for f in by_id.values() if not f["form_type"].endswith("/A")
+                 and fiscal_label(f["fiscal_year"], f["fiscal_period"]) == r.base_period_label]
+        if match:
+            return max(match, key=lambda f: f["filing_date"])
+        return None
+    return by_id.get(r.base_filing_id)
+
+
 def _change_item(r: changes.ChangeRecord, by_id: dict[int, dict]) -> dict:
-    base = by_id.get(r.base_filing_id)
+    base = _base_filing(r, by_id)
     return {
         "id": changes.stable_id(r), "kind": r.kind, "change_type": r.change_type, "category": r.category,
         "category_label": changes.CATEGORY_LABELS.get(r.category, r.category.replace("_", " ").capitalize()),
@@ -257,6 +293,7 @@ def build(conn: psycopg.Connection, company_id: int) -> tuple[dict, int | None, 
     rows = store.company_facts(conn, company_id)
     alias_map = store.aliases(conn, company_id)
     m = metrics.Metrics([r for r in rows if r["canonical_metric"]])
+    m.set_interim(filings)
 
     context = {
         "latest_filing_id": latest["filing_id"] if latest else None,
@@ -268,9 +305,11 @@ def build(conn: psycopg.Connection, company_id: int) -> tuple[dict, int | None, 
     sections = store.company_sections(conn, company_id, changes.NARRATIVE_CATEGORIES)
     records = changes.compute(rows, sections, filings, alias_map, m, company["reporting_currency"])
     revenue = changes.anchors(m, rows, company["reporting_currency"]).revenue
-    quarters = m.quarters()
+    bank = m.is_bank()
+    interim_kind = m.interim_kind()
+    interims = m.halves() if interim_kind == "half_yearly" else m.quarters()
     years = m.fiscal_years()
-    bridge_periods = ([(years[-1], "FY")] if years else []) + ([quarters[-1]] if quarters else [])
+    bridge_periods = ([(years[-1], "FY")] if years else []) + ([interims[-1]] if interims else [])
     payload = {
         "snapshot_version": SNAPSHOT_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -288,12 +327,14 @@ def build(conn: psycopg.Connection, company_id: int) -> tuple[dict, int | None, 
         "latest_annual": annual["accession_number"] if annual else None,
         "financials": {
             "currency": company["reporting_currency"],
-            "annual": metrics.table(m, "annual"),
-            "quarterly": metrics.table(m, "quarterly"),
+            "profile": "bank" if bank else "general",
+            "annual": metrics.table(m, "annual", bank),
+            "quarterly": metrics.table(m, "quarterly", bank),
+            "interim": interim_note(interim_kind, filings),
             "breakdowns": breakdowns(rows, alias_map, m),
         },
         "capital": {"sections": capital(rows, alias_map, context)},
-        "earnings_quality": {"bridges": earnings_quality(rows, m, bridge_periods)},
+        "earnings_quality": {"bridges": earnings_quality(rows, m, bridge_periods, bank)},
         "changes": filing_changes(records, filings, revenue),
         "insights": interpret.insights_section(conn, company_id, filings),
     }

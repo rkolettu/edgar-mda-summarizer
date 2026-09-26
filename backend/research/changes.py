@@ -68,6 +68,16 @@ DERIVED = [
     ("receivable_days", "Receivable days", "days"),
     ("inventory_days", "Inventory days", "days"),
 ]
+BANK_ROUTINE = {"operating_cash_flow", "capex", "cash", "debt_issued", "debt_repaid", "accounts_receivable",
+                "accounts_payable", "current_assets", "current_liabilities", "long_term_debt", "long_term_debt_noncurrent",
+                "debt_current", "commercial_paper", "marketable_securities"}
+BANK_DERIVED = [
+    ("cost_income_ratio", "Cost/income ratio", "points"),
+    ("net_margin", "Net margin", "points"),
+    ("roe", "Return on equity", "points"),
+    ("effective_tax_rate", "Effective tax rate", "points"),
+    ("loans_to_deposits", "Loans / deposits", "points"),
+]
 
 
 @dataclass
@@ -362,12 +372,14 @@ def derived_changes(m: metrics.Metrics, bases: Bases, currency: str | None) -> l
             return []
         fiscal_year, period, kind = years[-1], "FY", "annual"
     else:
-        quarters = m.quarters()
-        if not quarters:
+        interims = m.halves() if m.interim_kind() == "half_yearly" else m.quarters()
+        if not interims:
             return []
-        (fiscal_year, period), kind = quarters[-1], "quarterly"
-    current = metrics.column_values(m, fiscal_year, period, kind)
-    prior = metrics.column_values(m, fiscal_year - 1, period, kind)
+        (fiscal_year, period), kind = interims[-1], "quarterly"
+    bank = m.is_bank()
+    values = metrics.bank_column_values if bank else metrics.column_values
+    current = values(m, fiscal_year, period, kind)
+    prior = values(m, fiscal_year - 1, period, kind)
     label, base_label = fiscal_label(fiscal_year, period), fiscal_label(fiscal_year - 1, period)
     records = []
 
@@ -381,9 +393,11 @@ def derived_changes(m: metrics.Metrics, bases: Bases, currency: str | None) -> l
             unit=unit, currency=currency, period_label=label, base_period_label=base_label, details=details or {},
         ))
 
-    for key, name, unit in DERIVED:
+    for key, name, unit in BANK_DERIVED if bank else DERIVED:
         if current[key] is not None and prior[key] is not None:
             add(key, name, unit, current[key].value, prior[key].value)
+    if bank:
+        return records
 
     shares = []
     for fy in (fiscal_year, fiscal_year - 1):
@@ -510,7 +524,7 @@ def anchors(m: metrics.Metrics, rows: list[dict], currency: str | None) -> mater
     assets = [r for r in rows if r["canonical_metric"] == "total_assets" and r["currency"] == currency]
     latest_assets = max(assets, key=lambda r: (r["period_end"], r["filing_date"]))["value"] if assets else None
     return materiality.Anchors(currency, revenue.value if revenue else None, operating.value if operating else None,
-                               latest_assets)
+                               latest_assets, bank=m.is_bank())
 
 
 def _candidate(record: ChangeRecord) -> materiality.Candidate:
@@ -531,6 +545,7 @@ def _candidate(record: ChangeRecord) -> materiality.Candidate:
     return materiality.Candidate(
         record.category, change_type, unit=record.unit, amount=amount, base_amount=record.base_value,
         change=record.change, currency=record.currency, triggers=record.triggers, flags=record.flags,
+        balance=record.period_type == "instant",
         # Statement lines and amounts over a period (revenue by segment) matter by how much they moved; disclosed
         # balances (commitments, guarantees, debt) by their size.
         magnitude_basis="delta" if record.category == "financial_metric" or record.period_type == "duration" else "level",
@@ -546,6 +561,9 @@ def compute(rows: list[dict], sections: list[dict], filings: list[dict], aliases
         return []
     scale = anchors(m, rows, currency)
     records = numeric_changes(rows, aliases, bases)
+    if scale.bank:
+        # A bank's operating cash flow swings with its balance sheet and its borrowing is its funding: neither is news.
+        records = [r for r in records if not (r.category == "financial_metric" and (r.fact_key or "").split(".")[-1] in BANK_ROUTINE)]
     # A ratio the company reports itself (an effective tax rate) replaces the computed one.
     reported = {r.label.lower() for r in records if r.unit == "ratio"}
     records += [r for r in derived_changes(m, bases, currency) if r.label.lower() not in reported]

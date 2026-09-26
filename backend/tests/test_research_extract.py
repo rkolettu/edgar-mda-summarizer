@@ -223,3 +223,37 @@ def test_company_specific_tag_is_mapped_by_its_statement_row_when_unambiguous():
     extraction = extract.extract(filing, "10-K")
     securities = metrics(extraction, "marketable_securities")[(2026, "FY")]
     assert (securities.value_normalized, securities.confidence_level) == (51_951e6, "medium")
+
+
+def test_bank_lines_outflows_and_company_specific_pretax():
+    """A Canadian bank's statement: net interest income and non-interest expense under company names that extend
+    US GAAP names in another case, pretax income under a longer company name, and capital spending tagged as a
+    negative cash flow."""
+    body = (
+        cover("fy", "40-F", "October 31, 2025", 2025, "FY", fiscal_year_end="--10-31")
+        + row("Total revenue", value("ifrs-full:Revenue", "fy", "67,777"))
+        + row("Net interest income", value("acme:InterestIncomeExpenseNet1", "fy", "33,062"))
+        + row("Non-interest expenses", value("acme:NonInterestExpense1", "fy", "33,539"))
+        + row("Income before income taxes and share of associates",
+              value("acme:ProfitLossBeforeTaxAndEquityInNetIncomeOfInvestmentInAssociates", "fy", "24,905"))
+        + row("Net expenditures on premises", value("acme:NetExpendituresOnPremises", "fy", "(912)", sign="-"))
+        + row("Deposits", value("acme:DepositsOtherThanTrading", "fyend", "1,267,104"))
+    )
+    filing = parse(document(body, [context("fy", "2024-11-01", "2025-10-31"), context("fyend", instant="2025-10-31")]))
+    extraction = extract.extract(filing, "40-F")
+    assert metrics(extraction, "net_interest_income")[(2025, "FY")].value_normalized == 33_062e6
+    assert metrics(extraction, "operating_expenses")[(2025, "FY")].xbrl_concept == "acme:NonInterestExpense1"
+    assert metrics(extraction, "pretax_income")[(2025, "FY")].value_normalized == 24_905e6
+    assert metrics(extraction, "deposits")[(2025, "FY")].value_normalized == 1_267_104e6
+
+
+def test_outflows_are_positive_whatever_the_tagged_sign():
+    body = (
+        cover("fy", "40-F", "December 31, 2025", 2025, "FY")
+        + row("Revenue", value("ifrs-full:Revenue", "fy", "38,000"))
+        + row("Purchase of property, plant and equipment",
+              value("ifrs-full:PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities", "fy", "(6,676)", sign="-"))
+    )
+    extraction = extract.extract(parse(document(body, [context("fy", "2025-01-01", "2025-12-31")])), "40-F")
+    capex = metrics(extraction, "capex")[(2025, "FY")]
+    assert (capex.value_normalized, capex.value_reported) == (6_676e6, -6_676)
