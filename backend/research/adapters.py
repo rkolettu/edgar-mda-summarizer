@@ -89,13 +89,16 @@ def _sections_from_loaded(loaded: dict, mdna_kind: str) -> list[NarrativeSection
                                  mdna["url"], mdna["text"][:MDNA_CHARS], 0.9)]
     if loaded.get("risk_factors"):
         sections.append(NarrativeSection("risk_factors", "risk_factors", "heading", loaded["document_url"], loaded["risk_factors"], 0.9))
+    if loaded.get("business"):
+        sections.append(NarrativeSection("business", "business", "heading", loaded["document_url"], loaded["business"], 0.85))
     return sections
 
 
 def _loader_narrative(loader: Callable, mdna_kind: str = "exhibit"):
     def narrative(cik: int, filing: dict, html: str) -> tuple[list[NarrativeSection], list[str]]:
         try:
-            loaded = loader(cik, {**filing, "form": base_form(filing["form"])}, html=html)
+            with sec.keeping_lines():
+                loaded = loader(cik, {**filing, "form": base_form(filing["form"])}, html=html)
         except HTTPException as exc:
             return [], [f"Narrative sections not isolated: {exc.detail}"]
         sections = _sections_from_loaded(loaded, mdna_kind)
@@ -112,7 +115,8 @@ TENQ_RISK_END = re.compile(rf"i\s*t\s*e\s*m\s*[2-6]{sec.SEP}(?:unregistered|defa
 
 def _tenq_narrative(cik: int, filing: dict, html: str) -> tuple[list[NarrativeSection], list[str]]:
     url = sec.archive_url(cik, filing["accession_number"], filing["primary_doc"])
-    text = sec.html_to_text(html)
+    with sec.keeping_lines():
+        text = sec.html_to_text(html)
     sections, warnings = [], []
     mdna = sec.extract_section(text, sec.TENQ_MDNA_START, sec.TENQ_MDNA_END)
     if mdna:
@@ -126,12 +130,14 @@ def _tenq_narrative(cik: int, filing: dict, html: str) -> tuple[list[NarrativeSe
 
 
 ANNUAL_EXPECTED = ("management_discussion", "risk_factors", "commitments", "debt", "income_taxes", "segment_information")
+# 10-Ks and 20-Fs describe the business in the filing itself; a 40-F leaves it to the annual information form.
+BUSINESS_EXPECTED = (*ANNUAL_EXPECTED, "business")
 INTERIM_EXPECTED = ("management_discussion", "commitments", "debt")
 
 ADAPTERS = [
-    Adapter(frozenset({"10-K", "10-K/A", "10-KT"}), ANNUAL_EXPECTED, _loader_narrative(sec.load_10k)),
+    Adapter(frozenset({"10-K", "10-K/A", "10-KT"}), BUSINESS_EXPECTED, _loader_narrative(sec.load_10k)),
     Adapter(frozenset({"10-Q", "10-Q/A"}), INTERIM_EXPECTED, _tenq_narrative),
-    Adapter(frozenset({"20-F", "20-F/A"}), ANNUAL_EXPECTED, _loader_narrative(sec.load_20f)),
+    Adapter(frozenset({"20-F", "20-F/A"}), BUSINESS_EXPECTED, _loader_narrative(sec.load_20f)),
     Adapter(frozenset({"40-F", "40-F/A"}), ANNUAL_EXPECTED, _loader_narrative(sec.load_40f)),
 ]
 SUPPORTED_FORMS = frozenset().union(*(a.forms for a in ADAPTERS))

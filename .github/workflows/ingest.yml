@@ -1,8 +1,10 @@
 name: Ingest filings
 
 # Parses new SEC filings for the showcase watchlist (backend/research/watchlist.txt) into the research database, so
-# those company pages load instantly. Deterministic parsing only: no model calls, no tokens.
-# Needs repository secrets DATABASE_URL (the Neon connection string) and SEC_USER_AGENT ("App name contact@email").
+# those company pages load instantly. Parsing makes no model calls. When the GEMINI_API_KEY secret is set, the AI
+# analysis is also written for companies that lack it (once per new filing; free-tier Gemini).
+# Needs repository secrets DATABASE_URL (the Neon connection string) and SEC_USER_AGENT ("App name contact@email");
+# GEMINI_API_KEY (and optionally MISTRAL_API_KEY as a fallback) are optional.
 
 on:
   schedule:
@@ -32,6 +34,8 @@ jobs:
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
     steps:
       - name: Check configuration
         id: config
@@ -65,8 +69,10 @@ jobs:
           TICKERS: ${{ inputs.tickers }}
           FORCE: ${{ inputs.force && '--force' || '' }}
         run: |
+          INTERPRET=""
+          if [ -n "$GEMINI_API_KEY" ] || [ -n "$MISTRAL_API_KEY" ]; then INTERPRET="--interpret"; fi
           if [ -n "$TICKERS" ]; then
-            python -m research.ingest $TICKERS $FORCE
+            python -m research.ingest $TICKERS $FORCE $INTERPRET
           else
-            python -m research.ingest --watchlist $FORCE
+            python -m research.ingest --watchlist $FORCE $INTERPRET
           fi

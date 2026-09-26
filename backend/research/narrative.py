@@ -75,6 +75,8 @@ HYPOTHETICAL_FACTOR = 0.5
 
 # Page furniture that lands mid-sentence in flattened HTML ("For example, 24 Table of Contents we may face ...").
 PAGE_ARTIFACT = re.compile(r"\s*\b\d{0,3}\s*Table of Contents\b\s*", re.IGNORECASE)
+# Running page headers and footers on their own lines ("13", "PART I", "Item 1A"), which split paragraphs.
+PAGE_FURNITURE = re.compile(r"^(?:\d{1,3}|PART\s+[IV]+|Item\s+\d{1,2}[A-C]?\.?|Table of Contents)[ \t]*\n", re.IGNORECASE | re.MULTILINE)
 # Boilerplate that says nothing changed.
 BOILERPLATE = re.compile(
     r"there have been no material changes|risk factors (?:previously )?(?:described|disclosed) (?:in|under)|forward-looking statements",
@@ -87,7 +89,8 @@ def sentences(text: str) -> list[str]:
 
     Lines are paragraphs or table rows, so a line break also ends a sentence ("... $ 7,469" then "As of April 26 ...")
     unless the next line continues in lowercase (text wrapped mid-sentence)."""
-    text = re.sub(r"[ \t]*\n\s*(?=[a-z])", " ", PAGE_ARTIFACT.sub(" ", text or ""))
+    text = PAGE_FURNITURE.sub("", PAGE_ARTIFACT.sub(" ", text or ""))
+    text = re.sub(r"[ \t]*\n\s*(?=[a-z])", " ", text)
     parts = (re.sub(r"\s+", " ", s).strip() for line in text.split("\n") for s in SENTENCE_BREAK.split(line))
     return [s for s in parts if len(s) >= MIN_SENTENCE_CHARS and not BOILERPLATE.search(s) and not is_tabular(s)]
 

@@ -9,6 +9,7 @@ removals.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -562,6 +563,13 @@ def compute(rows: list[dict], sections: list[dict], filings: list[dict], aliases
 def stems(text: str) -> set[str]:
     """Distinctive word stems, for matching a label with wording ('guarantee' and 'guarantees')."""
     return {w[:6] for w in re.findall(r"[a-z]{5,}", text.lower()) if w not in GENERIC_WORDS}
+
+
+def stable_id(record: ChangeRecord) -> str:
+    """A change's identity across snapshot rebuilds (filing_changes rows are recreated each time), for notes that
+    refer to it."""
+    basis = f"{record.kind}|{record.category}|{record.fact_key or record.label}|{record.text or ''}"
+    return hashlib.sha1(basis.encode()).hexdigest()[:16]
 
 
 def _amounts(record: ChangeRecord, as_primary: bool) -> list[float]:

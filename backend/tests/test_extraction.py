@@ -522,3 +522,20 @@ def test_20f_review_in_annual_report_exhibit_as_in_astrazeneca(fake_sec):
     assert result["document_url"].endswith("azn-20f.htm")
     assert result["mdna"]["text"].startswith("Financial Review Business background")
     assert "Governance detail" not in result["mdna"]["text"]
+
+
+def test_business_and_spaced_risk_factor_headings():
+    filler = "We design software and cloud services for businesses and consumers around the world. " * 40
+    html = (
+        "<html><body><p>Item 1. Business 3</p><p>Item 1A. Risk Factors 14</p><p>Item 1B. Unresolved Staff Comments 29</p>"
+        f"<p>ITEM 1. B USINESS</p><p>GENERAL</p><p>{filler}</p>"
+        f"<p>ITEM 1A. RIS K FACTORS</p><p>{filler}</p><p>ITEM 1B. UNRESOL VED STAFF COMMENTS</p><p>None.</p>"
+        "<p>ITEM 2. PROPERTIES</p></body></html>"
+    )
+    text = sec.html_to_text(html)
+    assert sec.extract_business(text).startswith("ITEM 1. B USINESS GENERAL We design")
+    assert sec.extract_risk_factors(text).startswith("ITEM 1A. RIS K FACTORS We design")
+    with sec.keeping_lines():
+        lines = sec.html_to_text(html)
+    assert sec.extract_business(lines).startswith("ITEM 1. B USINESS\nGENERAL\nWe design")
+    assert "\n" not in sec.html_to_text(html)  # the legacy summary still reads one line

@@ -37,10 +37,16 @@ sources and coverage) so several research tabs can render without rereading fili
 - `.github/workflows/ingest.yml` runs the watchlist daily once the `DATABASE_URL` and `SEC_USER_AGENT` repository
   secrets are set.
 - `GET /api/research/{ticker}` returns the company's research snapshot (every tab's data), parsing its filings on
-  the first request; the page's Financials, Capital & Commitments and Filing Changes tabs read it, so they render
-  without the AI summary. Filing Changes ranks what the latest filing adds, changes or drops (numbers and wording)
-  with a materiality score computed in code. `GET /api/research/{ticker}/filings` lists the stored filings and their coverage.
-- `GEMINI_MODEL` overrides the Gemini model (Google now limits 2.5 models to projects that already use them).
+  the first request; every tab reads it. Financials, Capital & Commitments and Filing Changes are built from the
+  filings in code (Filing Changes ranks what the latest filing adds, changes or drops, numbers and wording, with a
+  materiality score); Overview, Business & Strategy, Risks and Earnings Quality add an AI analysis that is written
+  once per filing, quotes the filing for every extracted item, and cites the stored facts for every summary point.
+- `POST /api/research/{ticker}/insights` writes that analysis when it is missing (Gemini free tier: Flash-Lite reads
+  the filing text, Flash writes the summary from stored facts; Mistral's free tier is an optional fallback). The
+  legacy `/api/summarize` is used only when the research store cannot serve a company. `GET /api/research/{ticker}/filings` lists the stored filings and their coverage.
+- `GEMINI_EXTRACT_MODEL` and `GEMINI_SYNTH_MODEL` override the research models (defaults `gemini-3.5-flash-lite` and
+  `gemini-3.8-flash`); `GEMINI_MODEL` is the legacy summary's model and the research stages' first fallback (Google
+  now limits 2.5 models to projects that already use them). `MISTRAL_API_KEY` enables the last-resort fallback.
 
 ## Tests
 

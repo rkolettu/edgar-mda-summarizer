@@ -11,12 +11,12 @@ from datetime import date, datetime, timezone
 
 import psycopg
 
-from research import changes, concepts, metrics, store
+from research import changes, concepts, interpret, metrics, store
 from research.extract import PARSER_VERSION
 from research.rows import fiscal_label, latest_by, reported_label, source
 
 # Bump when the payload's shape or meaning changes; stored snapshots at an older version are rebuilt on read.
-SNAPSHOT_VERSION = 2
+SNAPSHOT_VERSION = 3
 
 CAPITAL_SECTIONS = [
     ("commitment", "Commitments"),
@@ -205,7 +205,7 @@ def _filing_ref(filing: dict | None) -> dict | None:
 def _change_item(r: changes.ChangeRecord, by_id: dict[int, dict]) -> dict:
     base = by_id.get(r.base_filing_id)
     return {
-        "kind": r.kind, "change_type": r.change_type, "category": r.category,
+        "id": changes.stable_id(r), "kind": r.kind, "change_type": r.change_type, "category": r.category,
         "category_label": changes.CATEGORY_LABELS.get(r.category, r.category.replace("_", " ").capitalize()),
         "label": r.label, "comparison": r.comparison, "value": r.value, "base_value": r.base_value,
         "annual_value": r.annual_value, "change": r.change, "unit": r.unit, "currency": r.currency,
@@ -295,7 +295,12 @@ def build(conn: psycopg.Connection, company_id: int) -> tuple[dict, int | None, 
         "capital": {"sections": capital(rows, alias_map, context)},
         "earnings_quality": {"bridges": earnings_quality(rows, m, bridge_periods)},
         "changes": filing_changes(records, filings, revenue),
+        "insights": interpret.insights_section(conn, company_id, filings),
     }
+    notes = payload["insights"].get("change_notes") or {}
+    for item in payload["changes"]["items"]:
+        if item["id"] in notes:
+            item["why_it_matters"] = notes[item["id"]]
     return payload, latest["filing_id"] if latest else None, records
 
 

@@ -18,7 +18,7 @@ from pathlib import Path
 from fastapi import HTTPException
 
 import sec
-from research import adapters, db, extract, ixbrl, snapshot, store
+from research import adapters, db, extract, interpret, ixbrl, llm, snapshot, store
 
 log = logging.getLogger("research.ingest")
 
@@ -180,12 +180,27 @@ def _detail(result: dict) -> str:
     return f"{result['facts']} facts, {result['sections']} sections, confidence {result['confidence']}{missing}"
 
 
+def _interpret(conn, company_id: int) -> bool:
+    if not llm.configured():
+        print("  AI analysis skipped: no GEMINI_API_KEY or MISTRAL_API_KEY", flush=True)
+        return True
+    try:
+        produced = interpret.run(conn, company_id)
+    except (llm.ModelUnavailable, interpret.Busy) as exc:
+        print(f"  AI analysis not written: {exc}", flush=True)
+        return isinstance(exc, interpret.Busy) or bool(getattr(exc, "quota", False))  # quota is not a job failure
+    print(f"  AI analysis {'written' if produced else 'already current'}", flush=True)
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Parse SEC filings into the research store (no model calls).")
+    parser = argparse.ArgumentParser(description="Parse SEC filings into the research store; --interpret also runs the "
+                                                 "model stages for companies whose filings changed.")
     parser.add_argument("tickers", nargs="*", help="tickers or company names")
     parser.add_argument("--watchlist", action="store_true", help=f"also ingest the companies in {WATCHLIST.name}")
     parser.add_argument("--annual", type=int, default=DEFAULT_ANNUAL, help="annual filings to keep per company")
     parser.add_argument("--force", action="store_true", help="re-parse filings already stored at this parser version")
+    parser.add_argument("--interpret", action="store_true", help="write the AI analysis where it is missing (needs GEMINI_API_KEY)")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
@@ -207,6 +222,8 @@ def main(argv: list[str] | None = None) -> int:
             for f in result["filings"]:
                 print(f"  {f['form']:<6} {f['report_date']}  {f['status']:<11} {_detail(f)}", flush=True)
                 failures += f["status"] == "failed"
+            if args.interpret:
+                failures += not _interpret(conn, result["company_id"])
         print(f"Database size: {store.storage_bytes(conn) / 1e6:.1f} MB", flush=True)
     return 1 if failures else 0
 

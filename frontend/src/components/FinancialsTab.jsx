@@ -37,7 +37,7 @@ function seriesRows(table, keys) {
   }))
 }
 
-function RevenueCashChart({ table, currency }) {
+export function RevenueCashChart({ table, currency }) {
   const series = [
     { key: 'revenue', label: 'Revenue', color: SERIES.blue },
     { key: 'free_cash_flow', label: 'Free cash flow', color: SERIES.aqua },
@@ -72,7 +72,7 @@ function RevenueCashChart({ table, currency }) {
   )
 }
 
-function MarginChart({ table }) {
+export function MarginChart({ table }) {
   const series = [
     { key: 'gross_margin', label: 'Gross', color: SERIES.blue },
     { key: 'operating_margin', label: 'Operating', color: SERIES.orange },

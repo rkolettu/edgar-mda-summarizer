@@ -19,7 +19,9 @@ function SkeletonSection() {
   )
 }
 
-export default function LoadingState({ ticker }) {
+const SUMMARY_MESSAGE = 'A first-time analysis can take a few minutes. This uses my Gemini API key; if its usage limit is reached, please try again in about 3 hours.'
+
+export default function LoadingState({ ticker, message = SUMMARY_MESSAGE }) {
   const [elapsed, setElapsed] = useState(0)
   useEffect(() => {
     const id = setInterval(() => setElapsed((e) => e + 1), 1000)
@@ -31,10 +33,7 @@ export default function LoadingState({ ticker }) {
       <div className="mb-10 max-w-2xl border-b border-line pb-9">
         <p className="mb-4 text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">Research in progress / {ticker}</p>
         <h1 className="text-3xl font-semibold tracking-[-0.05em] text-ink sm:text-4xl">Reading the filing.</h1>
-        <p className="mt-3 text-sm leading-relaxed text-ink-2">
-          A first-time analysis can take a few minutes. This uses my Gemini API key; if its usage limit is reached,
-          please try again in about 3 hours.
-        </p>
+        <p className="mt-3 text-sm leading-relaxed text-ink-2">{message}</p>
         <div className="loading-rule mt-6 h-1 w-full max-w-sm overflow-hidden rounded-full bg-line" aria-hidden="true" />
         <p className="mt-3 font-mono text-xs text-muted">{elapsed}s elapsed</p>
       </div>

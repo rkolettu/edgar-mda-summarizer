@@ -2,19 +2,23 @@ import { Analytics } from '@vercel/analytics/react'
 import { ArrowUpRight, ExternalLink, Info, TriangleAlert } from 'lucide-react'
 import { useRef, useState } from 'react'
 import AnalysisSection from './components/AnalysisSection'
+import BusinessTab from './components/BusinessTab'
 import CapitalDeploymentChart from './components/CapitalDeploymentChart'
 import CapitalTab from './components/CapitalTab'
 import ChangesSection from './components/ChangesSection'
+import EarningsTab from './components/EarningsTab'
 import FilingChangesTab from './components/FilingChangesTab'
 import FinancialsTab from './components/FinancialsTab'
 import KpiStrip from './components/KpiStrip'
 import LatestQuarter from './components/LatestQuarter'
 import LoadingState from './components/LoadingState'
+import OverviewTab from './components/OverviewTab'
 import RevenueMixChart from './components/RevenueMixChart'
+import RisksTab from './components/RisksTab'
 import SearchHeader from './components/SearchHeader'
 import Tabs, { TabPanel } from './components/Tabs'
 import { MarginsChart, RevenueFcfChart } from './components/TrendCharts'
-import { getJson } from './lib/api'
+import { getJson, postJson } from './lib/api'
 import { fiscalYearLabel } from './lib/format'
 
 const QUICK_TICKERS = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'JPM']
@@ -30,9 +34,14 @@ const MDNA_SOURCE_LABELS = {
 const TABS = [
   { key: 'overview', label: 'Overview' },
   { key: 'financials', label: 'Financials' },
+  { key: 'business', label: 'Business & Strategy', short: 'Business' },
   { key: 'capital', label: 'Capital & Commitments', short: 'Capital' },
+  { key: 'risks', label: 'Risks' },
+  { key: 'earnings', label: 'Earnings Quality', short: 'Earnings' },
   { key: 'changes', label: 'Filing Changes', short: 'Changes' },
 ]
+
+const RESEARCH_LOADING = "A company's first visit parses its recent annual and quarterly reports from SEC EDGAR, which can take up to a minute; later visits load from the database."
 
 const SECTIONS = [
   { key: 'revenue_drivers', title: 'Revenue drivers' },
@@ -158,14 +167,9 @@ function FailureAlert({ query, message }) {
   )
 }
 
-function Notice({ children }) {
-  return <p className="flex items-start gap-2 rounded-xl border border-line bg-panel px-5 py-4 text-sm text-ink-2"><Info size={15} className="mt-0.5 shrink-0 text-muted" />{children}</p>
-}
-
-// The header comes from the AI analysis when it has arrived, otherwise from the stored research.
+// The header comes from the stored research, or from the legacy summary when the research store cannot serve the company.
 function headerFor(summary, research) {
-  if (summary.status === 'ready') return { data: summary.data }
-  if (research.status !== 'ready') return { data: null }
+  if (research.status !== 'ready') return { data: summary.status === 'ready' ? summary.data : null }
   const r = research.data
   const latest = r.filings.find((f) => f.accession_number === r.latest_filing) ?? r.filings[0]
   return {
@@ -179,11 +183,8 @@ function headerFor(summary, research) {
   }
 }
 
-function OverviewPanel({ summary, ticker }) {
-  if (summary.status === 'loading') return <LoadingState ticker={ticker} />
-  if (summary.status === 'error') {
-    return <Notice>The AI summary is unavailable right now ({summary.error}). The Financials and Capital &amp; Commitments tabs are built from the filings' tagged data and do not depend on it.</Notice>
-  }
+// The legacy MD&A summary, shown only when the research store cannot serve the company.
+function OverviewPanel({ summary }) {
   const data = summary.data
   // Charts are in US dollars; hide them for filings reported in another (or an unverified) currency.
   const chartsHidden = Boolean(data.filing.currency) && data.filing.currency !== 'USD'
@@ -232,50 +233,26 @@ function OverviewPanel({ summary, ticker }) {
   )
 }
 
-function ResearchPanel({ research, children }) {
-  if (research.status === 'ready') return children(research.data)
-  if (research.status === 'loading') {
-    return <Notice>Reading the company's filings. A first visit parses its recent annual and quarterly reports, which can take up to a minute; later visits load from the database.</Notice>
-  }
-  return <Notice>Structured filing data is unavailable: {research.error}</Notice>
-}
-
 export default function App() {
   const [query, setQuery] = useState('')
   const [activeQuery, setActiveQuery] = useState('')
-  const [summary, setSummary] = useState({ status: 'idle' })
   const [research, setResearch] = useState({ status: 'idle' })
+  const [insightsRequest, setInsightsRequest] = useState({ status: 'idle' })
+  // The legacy MD&A summary runs only when the research store cannot serve the company (not configured, or a filer
+  // whose filings it cannot read), so a normal visit makes one set of model calls, once per filing.
+  const [summary, setSummary] = useState({ status: 'idle' })
   const [tab, setTab] = useState('overview')
   const latestRequest = useRef(0)
 
-  // The stored research usually answers in about a second; the AI summary can take a minute on a first visit.
-  // The page shows as soon as either arrives, and each tab waits only for its own data.
-  const loading = summary.status === 'loading' && research.status !== 'ready'
   const researchReady = research.status === 'ready'
-  const showPage = summary.status === 'ready' || researchReady
-  const failed = summary.status === 'error' && !researchReady && research.status !== 'loading'
+  const loading = research.status === 'loading' || (!researchReady && summary.status === 'loading')
+  const showPage = researchReady || summary.status === 'ready'
+  const failed = !showPage && !loading && summary.status === 'error'
+  const idle = research.status === 'idle' && summary.status === 'idle'
   const header = headerFor(summary, research)
 
-  async function runAnalysis(input) {
-    const q = input.trim()
-    if (!q || loading) return
-    const request = ++latestRequest.current
-    const current = () => request === latestRequest.current
-
-    setQuery(q)
-    setActiveQuery(q)
-    setTab('overview')
+  async function loadSummary(q, current) {
     setSummary({ status: 'loading' })
-    setResearch({ status: 'loading' })
-
-    getJson(`/api/research/${encodeURIComponent(q)}`, {})
-      .then((data) => current() && setResearch({ status: 'ready', data }))
-      .catch((err) => {
-        if (!current()) return
-        const unconfigured = err.status === 503 && /not configured/i.test(err.message)
-        setResearch({ status: unconfigured ? 'unavailable' : 'error', error: err.message || 'Unexpected error' })
-      })
-
     try {
       const body = await getJson('/api/summarize', { ticker: q })
       if (!current()) return
@@ -286,39 +263,82 @@ export default function App() {
     }
   }
 
+  async function runAnalysis(input) {
+    const q = input.trim()
+    if (!q || loading) return
+    const request = ++latestRequest.current
+    const current = () => request === latestRequest.current
+
+    setQuery(q)
+    setActiveQuery(q)
+    setTab('overview')
+    setSummary({ status: 'idle' })
+    setInsightsRequest({ status: 'idle' })
+    setResearch({ status: 'loading' })
+
+    let data
+    try {
+      data = await getJson(`/api/research/${encodeURIComponent(q)}`, {})
+    } catch (err) {
+      if (!current()) return
+      const unconfigured = err.status === 503 && /not configured/i.test(err.message)
+      setResearch({ status: unconfigured ? 'unavailable' : 'error', error: err.message || 'Unexpected error' })
+      await loadSummary(q, current)
+      return
+    }
+    if (!current()) return
+    const ticker = data.company?.ticker ?? q
+    setResearch({ status: 'ready', data })
+    setQuery(ticker)
+
+    // The AI analysis is written once per filing and then stored; ask for it only when it is missing.
+    if (data.insights?.status === 'ready' || !data.insights?.configured) return
+    setInsightsRequest({ status: 'loading' })
+    try {
+      const updated = await postJson(`/api/research/${encodeURIComponent(ticker)}/insights`)
+      if (!current()) return
+      setResearch({ status: 'ready', data: updated })
+      setInsightsRequest({ status: 'done' })
+    } catch (err) {
+      if (current()) setInsightsRequest({ status: 'error', error: err.message || 'Unexpected error' })
+    }
+  }
+
+  const tabProps = { research: research.data, request: insightsRequest }
   return (
     <div className="flex min-h-screen flex-col bg-page">
       <SearchHeader query={query} onQueryChange={setQuery} onSubmit={runAnalysis} loading={loading} />
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-10 sm:px-8 sm:py-12">
-        {loading && <LoadingState ticker={activeQuery} />}
+        {loading && <LoadingState ticker={activeQuery} message={research.status === 'loading' ? RESEARCH_LOADING : undefined} />}
 
         {failed && <FailureAlert query={activeQuery} message={summary.error} />}
 
-        {summary.status === 'idle' && <EmptyState onPick={runAnalysis} />}
+        {idle && <EmptyState onPick={runAnalysis} />}
 
         {showPage && (
           <>
             <CompanyHeader data={header.data} subtitle={header.subtitle} />
-            {research.status !== 'unavailable' && <Tabs tabs={TABS} active={tab} onChange={setTab} />}
-            <TabPanel tabKey="overview" active={research.status === 'unavailable' ? 'overview' : tab}>
-              <OverviewPanel summary={summary} ticker={activeQuery} />
-            </TabPanel>
-            <TabPanel tabKey="financials" active={tab}>
-              <ResearchPanel research={research}>{(data) => <FinancialsTab research={data} />}</ResearchPanel>
-            </TabPanel>
-            <TabPanel tabKey="capital" active={tab}>
-              <ResearchPanel research={research}>{(data) => <CapitalTab research={data} />}</ResearchPanel>
-            </TabPanel>
-            <TabPanel tabKey="changes" active={tab}>
-              <ResearchPanel research={research}>{(data) => <FilingChangesTab research={data} />}</ResearchPanel>
-            </TabPanel>
+            {researchReady ? (
+              <>
+                <Tabs tabs={TABS} active={tab} onChange={setTab} />
+                <TabPanel tabKey="overview" active={tab}><OverviewTab {...tabProps} onNavigate={setTab} /></TabPanel>
+                <TabPanel tabKey="financials" active={tab}><FinancialsTab research={research.data} /></TabPanel>
+                <TabPanel tabKey="business" active={tab}><BusinessTab {...tabProps} /></TabPanel>
+                <TabPanel tabKey="capital" active={tab}><CapitalTab research={research.data} /></TabPanel>
+                <TabPanel tabKey="risks" active={tab}><RisksTab {...tabProps} /></TabPanel>
+                <TabPanel tabKey="earnings" active={tab}><EarningsTab {...tabProps} /></TabPanel>
+                <TabPanel tabKey="changes" active={tab}><FilingChangesTab research={research.data} /></TabPanel>
+              </>
+            ) : (
+              <OverviewPanel summary={summary} />
+            )}
           </>
         )}
       </main>
 
       <footer className="mx-auto flex w-full max-w-6xl flex-col justify-between gap-2 border-t border-line px-5 py-6 text-[11px] text-muted sm:flex-row sm:px-8">
-        <span>Source: SEC EDGAR · Analysis: Gemini 2.5 Flash</span>
+        <span>Source: SEC EDGAR · AI analysis: Google Gemini, checked against the filings</span>
         <span>Research aid only. Review the original filing before making investment decisions.</span>
       </footer>
       <Analytics />

@@ -104,7 +104,7 @@ def rows(conn, sql, *params):
 def test_migrations_apply_once(research_conn):
     assert db.apply_migrations(research_conn) == []
     assert rows(research_conn, "SELECT version, name FROM schema_migrations ORDER BY version") == [
-        (1, "001_core"), (2, "002_aliases_snapshots"), (3, "003_filing_changes"),
+        (1, "001_core"), (2, "002_aliases_snapshots"), (3, "003_filing_changes"), (4, "004_model_outputs"),
     ]
 
 
@@ -141,7 +141,7 @@ def test_ingest_stores_facts_sections_and_sources(research_conn, nvda_sec):
         FROM filings ORDER BY period_end, filing_date""")
     # The synthetic 10-K has no debt, tax or segment notes and no net income, so its confidence is only medium.
     assert filings[0] == ("10-K", 2025, "FY", 12, True, "USD", "medium")
-    assert result["filings"][0]["missing"] == ["debt", "income_taxes", "segment_information"]
+    assert result["filings"][0]["missing"] == ["business", "debt", "income_taxes", "segment_information"]
     assert filings[-1] == ("10-Q", 2027, "Q2", 6, False, "USD", "medium")
 
     revenue = rows(research_conn, """
@@ -164,7 +164,7 @@ def test_ingest_stores_facts_sections_and_sources(research_conn, nvda_sec):
     q2_risks = rows(research_conn, """
         SELECT s.source_label, left(s.text, 40) FROM filing_sections s JOIN filings f USING (filing_id)
         WHERE f.accession_number = '0001045810-26-000075' AND s.category = 'risk_factors'""")
-    assert q2_risks == [("item1a_update", "Item 1A. Risk Factors Export controls no")]
+    assert q2_risks == [("item1a_update", "Item 1A. Risk Factors\nExport controls no")]  # paragraphs kept as lines
 
     company = store.find_company(research_conn, ticker="nvda")
     assert (company["name"], company["reporting_currency"], company["fiscal_year_end"]) == ("NVIDIA CORP", "USD", "01-31")

@@ -1,6 +1,7 @@
 import { CalendarClock, ChevronDown, ExternalLink, Layers, Quote } from 'lucide-react'
 import { useState } from 'react'
 import { TypeTag } from './ChangesSection'
+import { FigureText } from './Verification'
 import { formatSignedPct, formatUnit } from '../lib/format'
 
 const FILTERS = [
@@ -91,7 +92,7 @@ function Series({ item }) {
   )
 }
 
-function Passage({ text, label }) {
+export function Passage({ text, label }) {
   const long = text.length > 420
   const [open, setOpen] = useState(false)
   return (
@@ -182,6 +183,12 @@ function ChangeItem({ item }) {
         </>
       )}
 
+      {item.why_it_matters && (
+        <p className="mt-2 max-w-3xl text-sm leading-relaxed text-ink">
+          <span className="mr-1.5 text-[11px] font-semibold tracking-[0.08em] text-muted uppercase">Why it matters · AI</span>
+          <FigureText text={item.why_it_matters.note} spans={item.why_it_matters.figures} />
+        </p>
+      )}
       <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1.5">
         <p className="text-xs text-muted">
           <span className="font-mono text-ink-2">{item.score.toFixed(2)}</span>

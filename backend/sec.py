@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import contextvars
 import os
 import re
+from contextlib import contextmanager
 from functools import lru_cache
 from urllib.parse import quote_plus, urljoin
 
@@ -21,6 +23,13 @@ MIN_SECTION_CHARS = 2_000
 FOREIGN_MDNA_CHARS = 120_000
 
 SEP = r"\s*[.:\-–—|]?\s*"
+
+
+def spaced(phrase: str) -> str:
+    """A heading pattern that tolerates the stray spaces some filings put inside words ("FINAN CIAL")."""
+    return r"\s+".join(r"\s?".join(re.escape(ch) for ch in word) for word in phrase.split())
+
+
 # Some filers repeat the company name inside the heading ("Item 7. Bank of America Corporation and Subsidiaries
 # Management's Discussion and Analysis").
 ITEM7_START = re.compile(
@@ -28,9 +37,12 @@ ITEM7_START = re.compile(
     re.IGNORECASE,
 )
 ITEM7_END = re.compile(r"i\s*t\s*e\s*m\s*(?:7a\s*[.:\-–—|]?\s+quantitative|8\s*(?:[.:\-–—|]|\s+financial\s+statements))", re.IGNORECASE)
-ITEM1A_START = re.compile(rf"i\s*t\s*e\s*m\s*1a{SEP}risk\s+factors", re.IGNORECASE)
+# Some filings break words inside headings ("ITEM 1A. RIS K FACTORS", Microsoft).
+ITEM1A_START = re.compile(rf"i\s*t\s*e\s*m\s*1a{SEP}{spaced('risk factors')}", re.IGNORECASE)
 ITEM1A_END = re.compile(
-    rf"i\s*t\s*e\s*m\s*1b{SEP}unresolved\s+staff|i\s*t\s*e\s*m\s*1c{SEP}cybersecurity|i\s*t\s*e\s*m\s*2{SEP}properties", re.IGNORECASE
+    rf"i\s*t\s*e\s*m\s*1b{SEP}{spaced('unresolved staff')}|i\s*t\s*e\s*m\s*1c{SEP}{spaced('cybersecurity')}"
+    rf"|i\s*t\s*e\s*m\s*2{SEP}{spaced('properties')}",
+    re.IGNORECASE,
 )
 TENQ_MDNA_START = re.compile(rf"i\s*t\s*e\s*m\s*2{SEP}management'?s\s+discussion\s+and\s+analysis", re.IGNORECASE)
 TENQ_MDNA_END = re.compile(rf"i\s*t\s*e\s*m\s*3{SEP}quantitative|i\s*t\s*e\s*m\s*4{SEP}controls\s+and\s+procedures", re.IGNORECASE)
@@ -214,14 +226,36 @@ def archive_url(cik: int, accession_number: str, filename: str) -> str:
     )
 
 
+# The research pipeline keeps paragraphs and table rows as lines (risk factor headings, sentence boundaries after a
+# table row); the legacy summary flattens everything to one line. Section patterns match either, since \s covers
+# newlines.
+_KEEP_LINES = contextvars.ContextVar("keep_lines", default=False)
+BLOCK_TAG = re.compile(r"(<(?:/?(?:p|div|tr|li|h[1-6]|table|section|ul|ol|center)|br)\b[^>]*>)", re.IGNORECASE)
+
+
+@contextmanager
+def keeping_lines():
+    token = _KEEP_LINES.set(True)
+    try:
+        yield
+    finally:
+        _KEEP_LINES.reset(token)
+
+
 def html_to_text(html: str) -> str:
+    keep_lines = _KEEP_LINES.get()
+    if keep_lines:
+        html = BLOCK_TAG.sub("\\1\n", html)
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script", "style", "head"]):
         tag.decompose()
     text = soup.get_text(separator=" ")
     # Zero-width spaces are invisible in the filing but split words and headings for the regexes below.
     text = text.replace("\xa0", " ").replace("\u200b", "").replace("’", "'").replace("“", '"').replace("”", '"')
-    return re.sub(r"\s+", " ", text).strip()
+    if not keep_lines:
+        return re.sub(r"\s+", " ", text).strip()
+    lines = (re.sub(r"[^\S\n]+", " ", line).strip() for line in text.split("\n"))
+    return "\n".join(line for line in lines if line)
 
 
 ANY_ITEM_HEADING = re.compile(r"\bi\s*t\s*e\s*m\s*\d{1,2}[a-c]?\s*[.:\-–—|]?\s", re.IGNORECASE)
@@ -354,6 +388,23 @@ def extract_item7(text: str) -> str | None:
     return extract_section(text, ITEM7_START, ITEM7_END)
 
 
+ITEM1_START = re.compile(rf"i\s*t\s*e\s*m\s*1{SEP}{spaced('business')}\b", re.IGNORECASE)
+ITEM1_END = ITEM1A_START
+TWENTYF_ITEM4_START = re.compile(rf"i\s*t\s*e\s*m\s*4{SEP}information\s+on\s+the\s+company", re.IGNORECASE)
+TWENTYF_ITEM4_END = re.compile(
+    rf"i\s*t\s*e\s*m\s*4a{SEP}unresolved|i\s*t\s*e\s*m\s*5{SEP}operating\s+and\s+financial", re.IGNORECASE)
+BUSINESS_CHARS = 60_000
+
+
+def extract_business(text: str, form: str = "10-K") -> str | None:
+    """Item 1 Business of a 10-K, or Item 4 Information on the Company of a 20-F."""
+    start, end = (TWENTYF_ITEM4_START, TWENTYF_ITEM4_END) if form == "20-F" else (ITEM1_START, ITEM1_END)
+    section = extract_section(text, start, end)
+    if section and "incorporated by reference" in section[:1_500].lower() and len(section) < 10_000:
+        return None  # a pointer into an annual report, not the description itself
+    return section[:BUSINESS_CHARS] if section else None
+
+
 def extract_risk_factors(text: str) -> str | None:
     section = extract_section(text, ITEM1A_START, ITEM1A_END)
     return section[:RISK_FACTORS_CHARS] if section else None
@@ -370,11 +421,6 @@ UBS_OPERATING_END = re.compile(
     re.IGNORECASE,
 )
 UBS_RISK_START = re.compile(r"Risk factors\s+Certain risks,\s+including those described below", re.IGNORECASE)
-
-
-def spaced(phrase: str) -> str:
-    """A heading pattern that tolerates the stray spaces some filings put inside words ("FINAN CIAL")."""
-    return r"\s+".join(r"\s?".join(re.escape(ch) for ch in word) for word in phrase.split())
 
 
 TWENTYF_START = re.compile(
@@ -517,7 +563,7 @@ def load_20f(cik: int, filing: dict, html: str | None = None) -> dict:
     operating = operating[:FOREIGN_MDNA_CHARS]
     return {**filing, "document_url": document_url, "currency": detect_currency(operating),
             "mdna": {"text": operating, "source": source, "url": mdna_url},
-            "risk_factors": risks}
+            "risk_factors": risks, "business": extract_business(text, "20-F")}
 
 
 def load_40f(cik: int, filing: dict, html: str | None = None) -> dict:
@@ -583,6 +629,7 @@ def load_10k(cik: int, filing: dict, html: str | None = None) -> dict:
         "document_url": document_url,
         "mdna": extract_mdna(cik, filing, text, document_url),
         "risk_factors": extract_risk_factors(text),
+        "business": extract_business(text),
     }
 
 

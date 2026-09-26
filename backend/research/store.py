@@ -565,3 +565,16 @@ def save_changes(conn: psycopg.Connection, company_id: int, records: list) -> No
                 "WHERE fact_id = %s",
                 statuses,
             )
+
+
+def recent_quota_failure(conn: psycopg.Connection, company_id: int, minutes: int) -> bool:
+    """A model stage for the company failed on quota recently (so a page reload should not retry at once)."""
+    return conn.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM analysis_runs r JOIN filings f ON f.accession_number = r.accession_number
+            WHERE f.company_id = %s AND r.status = 'failed' AND r.error LIKE %s
+              AND r.finished_at > now() - make_interval(mins => %s))
+        """,
+        (company_id, "%quota%", minutes),
+    ).fetchone()[0]
