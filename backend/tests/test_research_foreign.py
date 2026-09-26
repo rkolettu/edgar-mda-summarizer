@@ -210,3 +210,10 @@ def test_a_joint_filing_links_its_document_under_the_co_registrant(monkeypatch):
     docs = adapters.list_documents(1610520, filing)
     assert [(d.url, d.role) for d in docs] == [
         ("https://www.sec.gov/Archives/edgar/data/1610520/000161052026000082/ubs-20260630.htm", "primary")]
+
+
+def test_a_glossary_after_the_mdna_is_left_out():
+    """TD's quarterly report ends its MD&A with a glossary whose definitions would read as new language."""
+    glossary = "\nGLOSSARY\nLoss Given Default: It is the amount of the loss the Bank would likely incur when a borrower defaults.\n"
+    parts = reports.document_parts([reports.Document("6-K", mdna() + glossary + "\nINTERIM CONSOLIDATED BALANCE SHEET\n")])
+    assert "Loss Given Default" not in parts.mdna[1] and parts.mdna[1].rstrip().endswith(PROSE)

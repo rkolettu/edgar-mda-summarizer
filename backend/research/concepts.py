@@ -89,7 +89,8 @@ METRICS: list[Metric] = [
        ["ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"], ["AdjustmentsForSharebasedPayments"]),
     _m("buybacks", "Share repurchases", CF, D, "currency",
        ["PaymentsForRepurchaseOfCommonStock", "PaymentsForRepurchaseOfEquity"],
-       ["PaymentsToAcquireOrRedeemEntitysShares", "PurchaseOfTreasuryShares"]),
+       ["PaymentsToAcquireOrRedeemEntitysShares", "PurchaseOfTreasuryShares"],
+       extension=r"^PaymentFor(?:Common)?Shares?RepurchasedForCancellation"),  # TD
     _m("dividends_paid", "Dividends paid", CF, D, "currency",
        ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"],
        ["DividendsPaidClassifiedAsFinancingActivities", "DividendsPaid", "DividendsPaidOrdinaryShares"]),
@@ -144,19 +145,25 @@ METRICS: list[Metric] = [
     _m("credit_loss_expense", "Credit loss expense", IS, D, "currency",
        ["ProvisionForLoanLeaseAndOtherLosses", "ProvisionForLoanAndLeaseLosses", "ProvisionForCreditLosses",
         "FinancingReceivableCreditLossExpenseReversal"],
-       ["ImpairmentLossImpairmentGainAndReversalOfImpairmentLossDeterminedInAccordanceWithIFRS9"]),
+       ["ImpairmentLossImpairmentGainAndReversalOfImpairmentLossDeterminedInAccordanceWithIFRS9",
+        "ImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLossLoansAndAdvances"],
+       # TD tags its provision as the allowance's charge to profit or loss; HSBC as loan impairment charges.
+       extension=r"^AdditionalAllowanceRecognisedIn(?:RecoveredFrom)?ProfitOrLossAllowanceAccountForCreditLosses"
+                 r"|^ImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLossLoans"),
     _m("operating_expenses", "Operating expenses", IS, D, "currency",
        ["NoninterestExpense", "OperatingExpenses"], ["OperatingExpense", "ExpenseByNature"]),
     _m("loans", "Loans", BS, I, "currency",
        ["LoansAndLeasesReceivableNetReportedAmount", "LoansAndLeasesReceivableNetOfDeferredIncome",
         "FinancingReceivableExcludingAccruedInterestAfterAllowanceForCreditLoss"],
-       ["LoansAndAdvancesToCustomers"]),
+       ["LoansAndAdvancesToCustomers"],
+       extension=r"^Loans(?:Net|NetOfAllowance(?:ForLoanLosses)?)\d*$"),  # TD's "Total loans, net of allowance"
     _m("deposits", "Deposits", BS, I, "currency", ["Deposits"], ["DepositsFromCustomers"],
        extension=r"^Deposits(?:OtherThanTrading)?\d*$"),
 ]
 # Outflows are shown as positive amounts whatever sign the filer tags them with ("Net expenditures on property, plant
-# and equipment (6,676)" as a negative cash flow).
-OUTFLOW_METRICS = {"capex", "buybacks", "dividends_paid", "acquisitions", "debt_repaid", "credit_loss_expense", "operating_expenses"}
+# and equipment (6,676)" as a negative cash flow). Credit losses keep their sign: a net release (HSBC's 2021) is a
+# gain, not a charge.
+OUTFLOW_METRICS = {"capex", "buybacks", "dividends_paid", "acquisitions", "debt_repaid", "operating_expenses"}
 
 METRICS_BY_KEY = {m.key: m for m in METRICS}
 
@@ -203,6 +210,9 @@ def metric_concepts(metric: Metric, standard: str) -> list[str]:
 TEXT_BLOCK_RULES: list[tuple[re.Pattern, tuple[str, ...]]] = [
     (re.compile(p), cats) for p, cats in [
         (r"SubsequentEvent|EventsAfterReportingPeriod", ("subsequent_events",)),
+        # A bank's combined note (TD's "Provisions, Contingent Liabilities, Commitments, Guarantees, Pledged Assets")
+        # is mostly litigation.
+        (r"(?:Provisions|ContingentLiabilit)\w*Guarantee", ("contingencies", "commitments", "guarantees")),
         (r"Guarantee", ("guarantees",)),
         (r"Cybersecurity", ("cybersecurity",)),
         (r"InsiderTrading|Clawback|ExecutiveCompensation|PayVsPerformance", ("governance",)),
@@ -308,7 +318,8 @@ NOISE_CONCEPTS = re.compile(
 )
 SUBSEQUENT_EVENT_AXIS = "SubsequentEventTypeAxis"
 # Neutral members that do not change what a value measures.
-NEUTRAL_MEMBERS = {("ConsolidationItemsAxis", "OperatingSegmentsMember")}
+NEUTRAL_MEMBERS = {("ConsolidationItemsAxis", "OperatingSegmentsMember"),
+                   ("SegmentConsolidationItemsAxis", "OperatingSegmentsMember")}  # IFRS's (RBC)
 
 # A bank's credit risk tables break its exposure down by credit grade, impairment stage and portfolio at once.
 CREDIT_GRADE_AXES = r"Grade|Rating|Stage|ImpairmentOfFinancialInstruments|CreditImpair|ExpectedCreditLoss|Scope|Measurement"
@@ -392,6 +403,8 @@ def family_for(concept: str, axes: set[str]) -> Family | None:
 
 WORD = re.compile(r"[A-Z]+(?=[A-Z][a-z]|\d|\b|_|$)|[A-Z]?[a-z]+|\d+")
 SMALL_WORDS = {"and", "of", "for", "the", "to", "in", "on", "or", "by", "with", "from", "at", "not", "yet"}
+# Acronyms some filers write in title case in their member names (TD's UsRetailMember, UBS's Emea1Member).
+ACRONYMS = {"us": "US", "usa": "USA", "uk": "UK", "eu": "EU", "emea": "EMEA", "apac": "APAC", "latam": "LATAM"}
 
 
 def humanize(qname: str, proper_name: bool = False) -> str:
@@ -406,6 +419,8 @@ def humanize(qname: str, proper_name: bool = False) -> str:
     for i, word in enumerate(words):
         if word.isupper():
             out.append(word)  # acronyms, and letters naming anonymized parties ("Customer A")
+        elif word.lower() in ACRONYMS and (i == 0 or word.lower() != "us"):  # "Payments to us" is a pronoun
+            out.append(ACRONYMS[word.lower()])
         elif i and word.lower() in SMALL_WORDS:
             out.append(word.lower())
         elif proper_name:

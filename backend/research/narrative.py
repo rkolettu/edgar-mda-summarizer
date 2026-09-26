@@ -71,6 +71,12 @@ REALIZED = re.compile(
     re.IGNORECASE,
 )
 HYPOTHETICAL_FACTOR = 0.5
+# Comparatives restated for a new presentation are a reclassification, not a restatement of reported results.
+PRESENTATION_RESTATEMENT = re.compile(
+    r"restated (?:to conform|for (?:alignment|consistency) with|to reflect (?:the )?(?:current|new)[^.]{0,30}presentation)"
+    r"|comparative (?:amounts|figures|information|period balances?|periods?)[^.]{0,40}\brestated",
+    re.IGNORECASE,
+)
 
 
 # Page furniture that lands mid-sentence in flattened HTML ("For example, 24 Table of Contents we may face ...").
@@ -151,7 +157,7 @@ def triggers(text: str) -> list[dict]:
     for sentence in sentences(text) or [text]:
         realized = bool(REALIZED.search(sentence)) and not HYPOTHETICAL.search(sentence)
         for pattern, label, weight in TRIGGERS:
-            if pattern.search(sentence):
+            if pattern.search(sentence) and not (label == "restatement" and PRESENTATION_RESTATEMENT.search(sentence)):
                 effective = weight if realized else weight * HYPOTHETICAL_FACTOR
                 if effective > found.get(label, {}).get("weight", -1):
                     found[label] = {"phrase": label, "weight": round(effective, 3), "realized": realized}
