@@ -104,7 +104,7 @@ def rows(conn, sql, *params):
 def test_migrations_apply_once(research_conn):
     assert db.apply_migrations(research_conn) == []
     assert rows(research_conn, "SELECT version, name FROM schema_migrations ORDER BY version") == [
-        (1, "001_core"), (2, "002_aliases_snapshots"),
+        (1, "001_core"), (2, "002_aliases_snapshots"), (3, "003_filing_changes"),
     ]
 
 

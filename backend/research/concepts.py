@@ -358,7 +358,21 @@ def humanize(qname: str, proper_name: bool = False) -> str:
 PROPER_NAME_AXES = re.compile(r"Name|Counterparty|Investee|Acquiree|BusinessAcquisition")
 
 
+# SEC country taxonomy members (country:TW) name places by ISO code.
+COUNTRY_NAMES = {
+    "US": "United States", "CN": "China", "TW": "Taiwan", "HK": "Hong Kong", "JP": "Japan", "KR": "South Korea",
+    "SG": "Singapore", "IN": "India", "IL": "Israel", "DE": "Germany", "GB": "United Kingdom", "FR": "France",
+    "NL": "Netherlands", "IE": "Ireland", "CH": "Switzerland", "CA": "Canada", "MX": "Mexico", "BR": "Brazil",
+    "AU": "Australia", "MY": "Malaysia", "TH": "Thailand", "VN": "Vietnam", "PH": "Philippines", "ID": "Indonesia",
+    "IT": "Italy", "ES": "Spain", "SE": "Sweden", "BE": "Belgium", "LU": "Luxembourg", "SA": "Saudi Arabia",
+    "AE": "United Arab Emirates", "ZA": "South Africa", "NO": "Norway", "DK": "Denmark", "FI": "Finland",
+}
+
+
 def member_label(axis: str, member: str) -> str:
+    prefix, _, name = member.rpartition(":")
+    if prefix == "country" and name in COUNTRY_NAMES:
+        return COUNTRY_NAMES[name]
     return humanize(member, proper_name=bool(PROPER_NAME_AXES.search(axis.split(":", 1)[-1])))
 
 

@@ -6,17 +6,17 @@ tabs or reloading the page never rereads a filing.
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 from datetime import date, datetime, timezone
 
 import psycopg
 
-from research import concepts, metrics, store
+from research import changes, concepts, metrics, store
 from research.extract import PARSER_VERSION
+from research.rows import fiscal_label, latest_by, reported_label, source
 
 # Bump when the payload's shape or meaning changes; stored snapshots at an older version are rebuilt on read.
-SNAPSHOT_VERSION = 1
+SNAPSHOT_VERSION = 2
 
 CAPITAL_SECTIONS = [
     ("commitment", "Commitments"),
@@ -34,29 +34,13 @@ METRIC_SECTIONS = {
     "debt_issued": "debt", "debt_repaid": "debt", "buybacks": "capital_return", "dividends_paid": "capital_return",
 }
 MAX_ITEMS = 25
+MAX_BACKGROUND = 40      # background-tier changes kept in the payload
 SERIES_POINTS = 8
-FOOTNOTE = re.compile(r"(\s*(\([a-z0-9]{1,2}\)|\*+))+\s*$", re.IGNORECASE)
-GENERIC_LABEL = re.compile(r"^(total|subtotal|net|other|none)\b[\w\s,]{0,14}$", re.IGNORECASE)
 YEAR_DAYS = 365
 
 
 def _iso(value: date | datetime | None) -> str | None:
     return value.isoformat() if value else None
-
-
-def fiscal_label(fiscal_year: int | None, fiscal_period: str | None) -> str | None:
-    """'Q2 FY2027', 'FY2026'; None for dates that are not a period end (a subsequent event), which show their date."""
-    if fiscal_year is None or fiscal_period is None:
-        return None
-    return f"FY{fiscal_year}" if fiscal_period == "FY" else f"{fiscal_period} FY{fiscal_year}"
-
-
-def reported_label(row: dict) -> str | None:
-    """The line item as the filing words it, without footnote markers; None when it only says 'Total'."""
-    label = FOOTNOTE.sub("", row.get("reported_label") or "").strip()
-    if not label or len(label) > 80 or GENERIC_LABEL.match(label) or not re.search(r"[A-Za-z]{3}", label):
-        return None
-    return label
 
 
 def _point(row: dict) -> dict:
@@ -76,33 +60,16 @@ def _change(current: dict | None, base: dict | None) -> float | None:
     return (current["value"] - base["value"]) / abs(base["value"])
 
 
-def _source(row: dict) -> dict | None:
-    if not row.get("document_url"):
-        return None
-    return {"text": row.get("source_text"), "heading": row.get("heading"), "document_url": row["document_url"],
-            "element_id": row.get("xbrl_element_id"), "filing": row["accession_number"]}
-
-
-def _latest_by(rows: list[dict], key) -> dict:
-    """Per key, the row from the latest filing (restated values win)."""
-    best: dict = {}
-    for row in rows:
-        slot = key(row)
-        if slot not in best or (row["filing_date"], row["fact_id"]) > (best[slot]["filing_date"], best[slot]["fact_id"]):
-            best[slot] = row
-    return best
-
-
 def _item(rows: list[dict], context: dict) -> dict | None:
     instant = rows[0]["period_type"] == "instant"
     if instant:
-        by_end = _latest_by(rows, lambda r: r["period_end"])
+        by_end = latest_by(rows, lambda r: r["period_end"])
         points = [by_end[end] for end in sorted(by_end)]
         latest = points[-1]
         same_length = points
     else:
         # Flows compare like-for-like: the longest year-to-date span at the latest date, against a year earlier.
-        by_span = _latest_by(rows, lambda r: (r["period_start"], r["period_end"]))
+        by_span = latest_by(rows, lambda r: (r["period_start"], r["period_end"]))
         latest_end = max(end for _, end in by_span)
         latest = max((r for (_, end), r in by_span.items() if end == latest_end), key=lambda r: r["period_months"] or 0)
         same_length = sorted((r for r in by_span.values() if r["period_months"] == latest["period_months"]),
@@ -141,7 +108,7 @@ def _item(rows: list[dict], context: dict) -> dict | None:
         "subsequent_event": "subsequent_event" in (latest_row["triggers"] or []),
         "in_latest_filing": context["latest_filing_id"] in filing_ids,
         "series": [_point(r) for r in same_length[-SERIES_POINTS:]],
-        "source": _source(latest_row),
+        "source": source(latest_row),
         "confidence": latest_row["confidence_level"],
     }
 
@@ -178,7 +145,7 @@ def breakdowns(rows: list[dict], aliases: dict[str, str], m: metrics.Metrics) ->
         family_rows = [r for r in rows if r["category"] == family and r["period_type"] == "duration"]
         if not family_rows:
             continue
-        best = _latest_by(family_rows, lambda r: (aliases.get(r["fact_key"], r["fact_key"]), r["fiscal_year"], r["fiscal_period"]))
+        best = latest_by(family_rows, lambda r: (aliases.get(r["fact_key"], r["fact_key"]), r["fiscal_year"], r["fiscal_period"]))
         views = {}
         for kind, periods in (("annual", ("FY",)), ("quarterly", ("Q1", "Q2", "Q3", "Q4"))):
             candidates = [(fy, fp) for (_, fy, fp) in best if fp in periods and fy is not None]
@@ -211,7 +178,7 @@ def earnings_quality(rows: list[dict], m: metrics.Metrics, periods: list[tuple[i
         bridge = metrics.earnings_bridge(m, fiscal_year, period)
         if bridge is None:
             continue
-        items = _latest_by(
+        items = latest_by(
             [r for r in rows if r["category"] in ("investment", "unusual_item", "non_operating") and r["period_type"] == "duration"
              and r["fiscal_year"] == fiscal_year and r["fiscal_period"] == period and r["normalized_unit"] == "currency"
              and not r["xbrl_concept"].split(":", 1)[-1].startswith("PaymentsToAcquire")],
@@ -219,7 +186,7 @@ def earnings_quality(rows: list[dict], m: metrics.Metrics, periods: list[tuple[i
         )
         bridge["label"] = fiscal_label(fiscal_year, period)
         bridge["items"] = sorted(
-            ({"key": r["fact_key"], "label": r["label"], "category": r["category"], "value": r["value"], "source": _source(r)}
+            ({"key": r["fact_key"], "label": r["label"], "category": r["category"], "value": r["value"], "source": source(r)}
              for r in items.values()),
             key=lambda i: -abs(i["value"]),
         )
@@ -227,7 +194,61 @@ def earnings_quality(rows: list[dict], m: metrics.Metrics, periods: list[tuple[i
     return out
 
 
-def build(conn: psycopg.Connection, company_id: int) -> tuple[dict, int | None]:
+def _filing_ref(filing: dict | None) -> dict | None:
+    if filing is None:
+        return None
+    return {"accession_number": filing["accession_number"], "form": filing["form_type"],
+            "fiscal_label": fiscal_label(filing["fiscal_year"], filing["fiscal_period"]),
+            "period_end": _iso(filing["period_end"]), "filing_date": _iso(filing["filing_date"])}
+
+
+def _change_item(r: changes.ChangeRecord, by_id: dict[int, dict]) -> dict:
+    base = by_id.get(r.base_filing_id)
+    return {
+        "kind": r.kind, "change_type": r.change_type, "category": r.category,
+        "category_label": changes.CATEGORY_LABELS.get(r.category, r.category.replace("_", " ").capitalize()),
+        "label": r.label, "comparison": r.comparison, "value": r.value, "base_value": r.base_value,
+        "annual_value": r.annual_value, "change": r.change, "unit": r.unit, "currency": r.currency,
+        "period_label": r.period_label, "base_period_label": r.base_period_label,
+        "base_filing": {"form": base["form_type"], "fiscal_label": fiscal_label(base["fiscal_year"], base["fiscal_period"])}
+        if base else None,
+        "text": r.text, "base_text": r.base_text, "triggers": [t["phrase"] for t in r.triggers],
+        "flags": sorted(r.flags), "reasons": r.score.reasons, "score": r.score.score, "tier": r.score.tier,
+        **{k: v for k, v in r.details.items() if k != "metric" and v is not None},
+    }
+
+
+def filing_changes(records: list[changes.ChangeRecord], filings: list[dict], revenue: float | None) -> dict:
+    """The latest filing's changes for the Filing Changes tab: grouped by amount, most material first, with the
+    lowest tier trimmed."""
+    by_id = {f["filing_id"]: f for f in filings}
+    bases = changes.Bases.of(filings)
+    groups = changes.group([r for r in records if r.change_type != "repeated"], revenue)
+    counts: dict[str, int] = defaultdict(int)
+    items = []
+    for primary, related in groups:
+        lead = max((primary, *related), key=lambda r: r.score.score)
+        counts[lead.score.tier] += 1
+        counts[primary.change_type] += 1
+        if lead.score.tier == "background" and counts["background"] > MAX_BACKGROUND:
+            continue
+        item = _change_item(primary, by_id)
+        item.update(score=lead.score.score, tier=lead.score.tier)
+        if lead is not primary:
+            item["reasons"] = list(dict.fromkeys(primary.score.reasons + lead.score.reasons))
+        item["related"] = [{k: v for k, v in _change_item(r, by_id).items() if k != "series"} for r in related]
+        items.append(item)
+    return {
+        "filing": _filing_ref(bases.latest) if bases else None,
+        "previous": _filing_ref(bases.previous) if bases else None,
+        "annual": _filing_ref(bases.annual) if bases else None,
+        "counts": dict(counts),
+        "items": items,
+        "hidden": max(0, counts["background"] - MAX_BACKGROUND),
+    }
+
+
+def build(conn: psycopg.Connection, company_id: int) -> tuple[dict, int | None, list[changes.ChangeRecord]]:
     company = store.find_company(conn, company_id=company_id)
     filings = store.company_filings(conn, company_id)
     originals = [f for f in filings if not f["form_type"].endswith("/A")]
@@ -244,6 +265,9 @@ def build(conn: psycopg.Connection, company_id: int) -> tuple[dict, int | None]:
         "earliest_end": min((f["period_end"] for f in filings if f["period_end"]), default=date.max),
         "latest_end": latest["period_end"] if latest else date.min,
     }
+    sections = store.company_sections(conn, company_id, changes.NARRATIVE_CATEGORIES)
+    records = changes.compute(rows, sections, filings, alias_map, m, company["reporting_currency"])
+    revenue = changes.anchors(m, rows, company["reporting_currency"]).revenue
     quarters = m.quarters()
     years = m.fiscal_years()
     bridge_periods = ([(years[-1], "FY")] if years else []) + ([quarters[-1]] if quarters else [])
@@ -270,12 +294,15 @@ def build(conn: psycopg.Connection, company_id: int) -> tuple[dict, int | None]:
         },
         "capital": {"sections": capital(rows, alias_map, context)},
         "earnings_quality": {"bridges": earnings_quality(rows, m, bridge_periods)},
+        "changes": filing_changes(records, filings, revenue),
     }
-    return payload, latest["filing_id"] if latest else None
+    return payload, latest["filing_id"] if latest else None, records
 
 
 def rebuild(conn: psycopg.Connection, company_id: int) -> dict:
     store.bridge_aliases(conn, company_id)
-    payload, as_of = build(conn, company_id)
-    store.save_snapshot(conn, company_id, as_of, SNAPSHOT_VERSION, PARSER_VERSION, payload)
+    payload, as_of, records = build(conn, company_id)
+    with conn.transaction():
+        store.save_changes(conn, company_id, records)
+        store.save_snapshot(conn, company_id, as_of, SNAPSHOT_VERSION, PARSER_VERSION, payload)
     return payload

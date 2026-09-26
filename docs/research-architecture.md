@@ -64,7 +64,7 @@ without relying on note numbers or Item numbers. The same parser handles 10-K, 1
    models were withdrawn.
 5. **One snapshot payload per company** with every tab; source text loads on click.
 
-## Schema (migrations 001-002)
+## Schema (migrations 001-003)
 
 | Table | Holds |
 |---|---|
@@ -76,9 +76,11 @@ without relying on note numbers or Item numbers. The same parser handles 10-K, 1
 | `analysis_runs` | One row per stage per filing: tokens, model, status; a unique partial index doubles as a lock so concurrent requests never pay twice |
 | `member_aliases` | A company renamed a category between filings: old key, new key, how it was linked, evidence |
 | `research_snapshots` | One JSON payload per company with every tab's data, its versions, and when EDGAR was last checked |
+| `filing_changes` | Every new, changed or removed item in the latest filing (numbers, derived ratios, wording): values and bases, change, comparison, triggers, flags, materiality score with components and reasons, tier, source ids |
 
-Planned: `fact_comparisons` (sequential, vs annual, YoY deltas; recomputed when filings arrive), `candidates`
-(materiality triggers), `insights` (tab insights with fact and source ids and verification).
+Comparisons are recomputed in code whenever the snapshot is rebuilt (they are cheap) and stored in `filing_changes`,
+which also serves as the candidate list for the later model stages; the facts compared get their `disclosure_status`
+and `materiality_score`. Planned: `insights` (tab insights with fact and source ids and verification).
 
 Derived metrics (margins, growth, free cash flow, cash conversion, net cash, receivable and inventory days, discrete
 quarters from year-to-date totals) are computed in `research/metrics.py` when the snapshot is built, never stored as
@@ -97,22 +99,59 @@ facts and never produced by a model; a restated period takes the latest filing's
 
 ## Materiality (phase 3)
 
-`score = .35 magnitude + .25 change + .20 strategic + .10 language + .10 novelty`, plus bonuses (subsequent event,
-new guarantee or financing, critical audit matter, over $10B), capped at 1.0. Magnitude is relative to the company's
-own revenue (5%), operating income (10%) and total assets (10%); the $10B absolute trigger applies only to USD
-reporters because there is no FX conversion. Tiers: ≥ .70 top, ≥ .45 notable, otherwise background (never sent to
-synthesis). Checked against NVIDIA: the new $105B guarantee scores ~1.0, supply commitments at $279B (+134%) ~0.85,
-a word-for-word repeated risk factor ~0.15.
+`research/materiality.py`: `score = .35 magnitude + .25 change + .20 strategic + .10 language + .10 novelty`, plus
+bonuses (subsequent event, new guarantee or financing, hypothetical-to-realized language, material weakness, critical
+audit matter, over $10B), capped at 1.0. Every score keeps its components and plain-language reasons.
+
+- Magnitude is relative to the company's own latest fiscal-year revenue (5% scores 0.7), operating income (10%,
+  floored at 2% of revenue) and total assets (10%); the $10B trigger applies only to USD reporters because amounts
+  are never converted. Balances (commitments, guarantees, debt) are sized by their level; statement lines and amounts
+  over a period (revenue by segment) by how much they moved, or every large line of a large company would rank as
+  material every quarter.
+- A percentage change needs an amount behind it (0.5% of revenue or $1B), so a doubling of a small line stays low.
+  Ratios and derived metrics change in percentage points (5 points scores 0.7), day counts in days (15).
+- Tiers: ≥ .70 most material, ≥ .45 notable, otherwise background (never sent to synthesis).
+
+Checked on NVIDIA's Q2 FY2027 10-Q: the new $105B SB Energy guarantee scores 1.00; supply commitments at $279B
+(+134%) 0.85; revenue +106% year over year 0.83; a new risk factor about export controls 0.50; a repeated risk factor
+about 0.15.
 
 ## Comparisons (phase 3)
 
-Instants (commitments, debt, guarantees) compare with the previous filing, the latest annual and the same date a year
-earlier; durations compare year over year for the same length (usually from the same filing's comparative) and
-sequentially where 3-month data exists. Keys stay stable across filings through mapping rules, then
-**comparative-period bridging**: NVIDIA renamed its supply-commitment category between Q1 and Q2, but the Q2 filing
-reports the April figure ($119B) under the new name, which matches Q1's value under the old name, so code records the
-alias. Interim filings are condensed, so a missing item is "removed" only when comparing like forms. Narrative
-sections diff by paragraph hash and similarity, flagging changed numbers and "may" → "has" shifts.
+`research/changes.py` compares the latest filing with three bases: the **previous report**, the **latest annual
+report**, and the **same period a year earlier**.
+
+- **Balances** (commitments, guarantees, debt, headline balance sheet lines) compare with the previous report, with the
+  annual value alongside (vs. the prior annual report when the latest filing is annual).
+- **Amounts over a period** compare with the same period a year earlier: the discrete quarter when the filing reports
+  one with a comparable, else the year to date.
+- **Derived ratios** for the latest quarter or year (margins, capex intensity, tax rate, receivable and inventory
+  days, non-operating share of pretax income) compare year over year. Receivables or inventory growing 20 points
+  faster than revenue is its own item.
+- **Status**: new (nothing earlier, not even a comparative, and an earlier filing exists that could have reported it),
+  changed (5% or more, one point for ratios), repeated, or removed. Interim filings are condensed, so a line missing
+  from a 10-Q is removed only when the previous report was also a 10-Q. A removed line is marked "possibly renamed or
+  split" when the same filing adds lines under the same concept or with a similar name.
+- Keys stay stable across renames through `member_aliases`: **comparative-period bridging** (NVIDIA renamed its
+  supply-commitment category between Q1 and Q2, but the Q2 filing reports April's $119B under the new name) and
+  dropped-word matching.
+- **Anonymized customers** ("Customer A") are relabeled by companies every period, so their shares are compared as a
+  set: the largest share and how many are disclosed.
+- Three or more new lines under a concept the company never tagged before are a table **itemized for the first
+  time** (TSMC's 20-F began tagging each bond in FY2025), folded into one entry and scored below a genuinely new item.
+
+**Wording** (`research/narrative.py`) is compared sentence by sentence with two fingerprints, exact and with numbers
+and dates masked, so "fiscal 2025" → "fiscal 2026" and "As of April 26" → "As of July 26" are repeats and "$119
+billion" → "$279 billion" is a number change. Unmatched sentences that share most of their words (Jaccard ≥ 0.75)
+are rewordings; the rest form new or removed passages. Flattened table rows are left out. A 10-Q's risk factors list
+only updates, so they compare with the annual report without looking for removals, and language the previous 10-Q
+already added is marked "first disclosed in Q1". Management discussion is rewritten every period, so only sentences
+with trigger phrases (weighted lower when hypothetical: "could", "may", "if") are candidates. Amounts quoted in a
+passage size it, except in risk factors.
+
+**Grouping**: a tagged value, the note sentence and the MD&A sentence about the same amount are shown as one item,
+led by the tagged value. Amounts must match within 0.5%, and the wording must name the value's subject (a shared
+distinctive word stem), since round amounts often coincide ($25B of leases vs. a $25B commercial paper program).
 
 ## Token plan (phase 4-5)
 
@@ -138,7 +177,7 @@ acquisitions, 2.03 debt or guarantees, 2.05/2.06 restructuring or impairment, 4.
 |---|---|---|
 | 1 Foundation | Migrations; generic filing model; inline XBRL parser; metric mapping (US GAAP, IFRS); note sections; adapters for 10-K, 10-Q, 20-F, 40-F; ingest CLI and daily workflow; read-only `GET /api/research/{ticker}/filings`; token logging | **Done** |
 | 2 Deterministic facts | Disclosure families (commitments, guarantees, debt, investments, capital return, non-operating and unusual items, customer concentration, backlog, taxes) and segment, geographic and product revenue; renamed-category linking; derived metrics and working capital; 5-year history from three annual reports; snapshot builder; on-demand `GET /api/research/{ticker}` with storage guard; tab frame, Financials tab, Capital & Commitments tab | **Done** |
-| 3 Compare and score | `fact_comparisons`, disclosure status, paragraph fingerprints and narrative diffs, trigger phrases, materiality; Filing Changes tab | |
+| 3 Compare and score | Comparison engine (previous report, annual report, year earlier), disclosure status, sentence fingerprints and narrative diffs, trigger phrases with modality, materiality scoring, grouping, `filing_changes`; Filing Changes tab | **Done** |
 | 4 Interpretation | Calls A and B, insights bound to fact ids, verification; Overview, Business & Strategy, Risks, Earnings Quality | |
 | 5 Audit and robustness | Call C; full-text and model fallbacks; 6-K, 8-K; messy-filer regression set | |
 | 6 Polish | Source drill-downs; retire `/api/summarize` and the `analyses` cache | |
@@ -177,6 +216,31 @@ Live runs on NVIDIA, Microsoft, TSMC and Suncor, all from tags, with no model:
   lease not yet commenced" share no distinctive words; customers are anonymized and relabeled between filings.
 - The chart palette's orange and teal failed the dataviz validator's color-vision check (protan delta E 5.6); both were
   resaturated within their hues and now pass.
+
+## Phase 3 findings
+
+Live runs on NVIDIA (10-Q), Microsoft (10-K), TSMC (20-F) and Suncor (40-F), with no model:
+
+- NVIDIA Q2 FY2027: 31 most material, 50 notable. Top: the $105B SB Energy guarantee (new, subsequent event) with the
+  note's wording folded in; guarantees' maximum exposure $0.86B → $108.5B; new commitment lines (AI cloud partnership
+  $36B, data center leases not yet commenced $25B and $20B); supply commitments $119B → $279B; debt issued $24.9B from
+  zero with the "In June 2026, we issued $25.0 billion" sentence. Language: new export control and indebtedness risk
+  factors, the new "Commitments, guarantees, and other commercial arrangements" risk. The largest customer's share of
+  receivables fell from 30% to 22% while five customers are now disclosed, up from three.
+- Microsoft FY2026 10-K: leases not yet commenced $92.7B → $329.1B, capex +80%, capex intensity +12 points,
+  remaining performance obligations $375B → $684B, inventory growing 31 points faster than revenue.
+- TSMC FY2025 20-F: nothing above 0.70 (growth of 30-47% is notable for a company this size); its first per-bond
+  tagging (18 US dollar bonds) folds into one first-itemized entry instead of 18 "new" bonds.
+- Suncor FY2025 40-F: the syndicated credit facility extended from 2027 to 2029 shows as a new 2029 facility with the
+  2027 one "possibly renamed or split into" it.
+- Fixed along the way: sentences split after "U.S." and "Inc."; table rows without a period glued onto the following
+  sentence (hiding NVIDIA's new $25B notes issuance); a trailing comma kept years from counting as rolled forward;
+  grouping on amount alone folded unrelated round numbers together; a CSS rule outside Tailwind's layers overrode every
+  button's text size.
+- Not solved yet: passages of consecutive new risk-factor sentences can run two risk factors together (no headings in
+  the extracted text); NVIDIA's renamed lease line is still new plus removed (marked as possibly renamed); coverage
+  gaps from phase 1 (Microsoft's 10-K risk factors, JPMorgan's 10-Q MD&A, ASML's 20-F narrative) leave those diffs
+  empty. Storage after vacuum: about 1.6 MB per company in total, of which about 120 KB is `filing_changes`.
 
 ## Operating it
 

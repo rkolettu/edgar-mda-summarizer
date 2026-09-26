@@ -514,3 +514,54 @@ def evict_companies(conn: psycopg.Connection, keep: int) -> int:
         """,
         (keep,),
     ).rowcount
+
+
+# --- filing changes ---
+
+def company_sections(conn: psycopg.Connection, company_id: int, categories: tuple[str, ...]) -> list[dict]:
+    """Stored section text (top-level notes and narrative sections that retention kept) in the given categories."""
+    with conn.cursor(row_factory=dict_row) as cur:
+        return cur.execute(
+            """
+            SELECT s.section_id, s.filing_id, s.category, s.heading, s.document_url, s.ordinal, s.text
+            FROM filing_sections s JOIN filings f USING (filing_id)
+            WHERE f.company_id = %s AND s.category = ANY(%s) AND s.text IS NOT NULL
+            """,
+            (company_id, list(categories)),
+        ).fetchall()
+
+
+def save_changes(conn: psycopg.Connection, company_id: int, records: list) -> None:
+    """Replaces the company's scored changes, and sets the disclosure status and materiality of the facts compared.
+
+    Called inside the caller's transaction. Repeated lines only update their fact; the table keeps what changed."""
+    conn.execute("DELETE FROM filing_changes WHERE company_id = %s", (company_id,))
+    stored = [r for r in records if r.change_type != "repeated"]
+    if stored:
+        with conn.cursor() as cur:
+            cur.executemany(
+                """
+                INSERT INTO filing_changes (company_id, filing_id, base_filing_id, comparison, kind, change_type,
+                    category, label, fact_key, fact_id, base_fact_id, section_id, value, base_value, annual_value,
+                    change, unit, currency, period_label, base_period_label, text, base_text, triggers, flags,
+                    materiality_score, materiality_components, reasons, tier, details)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s)
+                """,
+                [
+                    (company_id, r.filing_id, r.base_filing_id, r.comparison, r.kind, r.change_type, r.category,
+                     r.label, r.fact_key, r.fact_id, r.base_fact_id, r.section_id, r.value, r.base_value,
+                     r.annual_value, r.change, r.unit, r.currency, r.period_label, r.base_period_label, r.text,
+                     r.base_text, Jsonb(r.triggers), sorted(r.flags), r.score.score, Jsonb(r.score.components),
+                     Jsonb(r.score.reasons), r.score.tier, Jsonb(r.details))
+                    for r in stored
+                ],
+            )
+    statuses = [(r.change_type, r.score.score, Jsonb(r.score.components), r.fact_id) for r in records if r.fact_id]
+    if statuses:
+        with conn.cursor() as cur:
+            cur.executemany(
+                "UPDATE facts SET disclosure_status = %s, materiality_score = %s, materiality_components = %s "
+                "WHERE fact_id = %s",
+                statuses,
+            )

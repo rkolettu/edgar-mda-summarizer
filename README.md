@@ -37,8 +37,9 @@ sources and coverage) so several research tabs can render without rereading fili
 - `.github/workflows/ingest.yml` runs the watchlist daily once the `DATABASE_URL` and `SEC_USER_AGENT` repository
   secrets are set.
 - `GET /api/research/{ticker}` returns the company's research snapshot (every tab's data), parsing its filings on
-  the first request; the page's Financials and Capital & Commitments tabs read it, so they render without the AI
-  summary. `GET /api/research/{ticker}/filings` lists the stored filings and their coverage.
+  the first request; the page's Financials, Capital & Commitments and Filing Changes tabs read it, so they render
+  without the AI summary. Filing Changes ranks what the latest filing adds, changes or drops (numbers and wording)
+  with a materiality score computed in code. `GET /api/research/{ticker}/filings` lists the stored filings and their coverage.
 - `GEMINI_MODEL` overrides the Gemini model (Google now limits 2.5 models to projects that already use them).
 
 ## Tests

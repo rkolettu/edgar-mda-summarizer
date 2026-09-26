@@ -5,6 +5,7 @@ import AnalysisSection from './components/AnalysisSection'
 import CapitalDeploymentChart from './components/CapitalDeploymentChart'
 import CapitalTab from './components/CapitalTab'
 import ChangesSection from './components/ChangesSection'
+import FilingChangesTab from './components/FilingChangesTab'
 import FinancialsTab from './components/FinancialsTab'
 import KpiStrip from './components/KpiStrip'
 import LatestQuarter from './components/LatestQuarter'
@@ -30,6 +31,7 @@ const TABS = [
   { key: 'overview', label: 'Overview' },
   { key: 'financials', label: 'Financials' },
   { key: 'capital', label: 'Capital & Commitments', short: 'Capital' },
+  { key: 'changes', label: 'Filing Changes', short: 'Changes' },
 ]
 
 const SECTIONS = [
@@ -307,6 +309,9 @@ export default function App() {
             </TabPanel>
             <TabPanel tabKey="capital" active={tab}>
               <ResearchPanel research={research}>{(data) => <CapitalTab research={data} />}</ResearchPanel>
+            </TabPanel>
+            <TabPanel tabKey="changes" active={tab}>
+              <ResearchPanel research={research}>{(data) => <FilingChangesTab research={data} />}</ResearchPanel>
             </TabPanel>
           </>
         )}

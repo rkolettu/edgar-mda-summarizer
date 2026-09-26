@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 import main
 from research import ingest, service, snapshot, store
 from tests.conftest import submissions_payload
-from tests.ixbrl_fixture import context, cover, document, row, value
+from tests.ixbrl_fixture import context, cover, document, row, text_block, value
 from tests.test_research_ingest import CIK, SUBMISSIONS_URL, archive, index_page
 
 COMMITMENTS = "us-gaap:OtherCommitmentsAxis"
@@ -13,6 +13,14 @@ COMMITMENTS = "us-gaap:OtherCommitmentsAxis"
 
 def commitment(ctx: str, amount: str) -> str:
     return value("us-gaap:OtherCommitment", ctx, amount, scale=9, decimals=-8)
+
+
+def commitments_note(ctx: str, *paragraphs: str) -> str:
+    inner = "<p>Commitments and Contingencies</p>" + "".join(f"<p>{p}</p>" for p in paragraphs)
+    return text_block("us-gaap:CommitmentsAndContingenciesDisclosureTextBlock", ctx, inner, f"note-{ctx}")
+
+
+SUPPLY_SENTENCE = "We entered into supply commitments to secure manufacturing capacity for our data center products."
 
 
 def member(cid: str, name: str, instant: str, *extra) -> str:
@@ -56,6 +64,7 @@ def q1_2027() -> str:
         + row("Operating cash flow", value("us-gaap:NetCashProvidedByUsedInOperatingActivities", "q", "50,300"))
         + row("Supply", commitment("supply", "119")) + row("Investments", commitment("invest", "27"))
         + row("Other", commitment("other", "6"))
+        + commitments_note("q", SUPPLY_SENTENCE, "As of April 26, 2026, these supply and capacity commitments were $119 billion.")
     )
     return document(body, [
         context("q", "2026-01-26", end), member("supply", "ManufacturingSupplyAndCapacity", end),
@@ -76,6 +85,10 @@ def q2_2027() -> str:
         + row("Equity investments", commitment("equity", "25"))
         + row("Total", commitment("total", "366"))
         + row("Financial guarantees", value("us-gaap:GuaranteeObligationsMaximumExposure", "guarantee", "105", scale=9))
+        + commitments_note(
+            "q", SUPPLY_SENTENCE, "As of July 26, 2026, these supply and capacity commitments were $279 billion.",
+            "We entered into land, power, and shell guarantees of $105 billion for AI cloud partners, providing credit "
+            "support for their data center leases.")
     )
     return document(body, [
         context("ytd", "2026-01-26", end), context("q", "2026-04-27", end), context("end", instant=end),
@@ -148,6 +161,41 @@ def test_capital_items_compare_latest_prior_and_annual(payload):
 
     debt = items(payload, "debt")["Long-term debt, including current portion"]
     assert (debt["latest"]["value"], debt["prior"]["value"]) == (33_366e6, 8_468e6)
+
+
+def test_filing_changes_rank_what_is_new_or_moved(research_conn, payload):
+    changes = payload["changes"]
+    assert (changes["filing"]["fiscal_label"], changes["previous"]["fiscal_label"], changes["annual"]["fiscal_label"]) == (
+        "Q2 FY2027", "Q1 FY2027", "FY2026")
+    by_label = {i["label"]: i for i in changes["items"]}
+    assert "repeated" not in {i["change_type"] for i in changes["items"]}
+
+    guarantee = changes["items"][0]
+    assert (guarantee["label"], guarantee["change_type"], guarantee["tier"]) == ("Financial guarantee", "new", "top")
+    # The note's sentence about the same $105B is folded into the tagged value.
+    assert [r["kind"] for r in guarantee["related"]] == ["narrative"]
+    assert "shell guarantees of $105 billion" in guarantee["related"][0]["text"]
+    assert "credit support" in guarantee["related"][0]["triggers"]
+
+    supply = by_label["Supply and capacity commitments"]
+    assert (supply["change_type"], supply["value"], supply["base_value"], supply["annual_value"]) == (
+        "changed", 279e9, 119e9, 95.2e9)
+    assert supply["change"] == pytest.approx(160 / 119) and supply["tier"] == "top"
+    assert (supply["comparison"], supply["base_period_label"]) == ("sequential", "Q1 FY2027")
+    assert [p["value"] for p in supply["series"]] == [95.2e9, 119e9, 279e9]
+
+    other = by_label["Other commitments"]
+    assert other["change_type"] == "removed" and other["possibly_replaced_by"] == ["Future purchase and other commitments"]
+    assert "Revenue" not in by_label  # no filing reports the quarter a year earlier, so nothing comparable
+
+    company_id = store.find_company(research_conn, ticker="NVDA")["company_id"]
+    stored = dict(research_conn.execute(
+        "SELECT label, tier FROM filing_changes WHERE company_id = %s AND kind = 'numeric'", (company_id,)).fetchall())
+    assert stored["Supply and capacity commitments"] == "top"
+    status = research_conn.execute(
+        "SELECT disclosure_status, materiality_score FROM facts WHERE company_id = %s AND fact_key LIKE %s "
+        "AND period_end = '2026-07-26' AND NOT is_comparative", (company_id, "%supply_and_capacity%")).fetchone()
+    assert status[0] == "changed" and status[1] >= 0.7
 
 
 def test_financial_tables(payload):

@@ -20,7 +20,8 @@ from research.ixbrl import Fact, IxbrlFiling, Period, local_name
 
 # Bump when extraction changes; stored filings at an older version are re-parsed on the next ingest.
 # 2: disclosure families (commitments, guarantees, debt, ...) and segment breakdowns.
-PARSER_VERSION = 2
+# 3: country names for geographic members (country:TW -> Taiwan).
+PARSER_VERSION = 3
 
 ANNUAL_FORMS = {"10-K", "10-KT", "20-F", "40-F"}
 YEAR_DAYS = 365.25
