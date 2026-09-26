@@ -15,13 +15,17 @@ export async function getJson(path, params, signal) {
 }
 
 // Research endpoints report their own reasons (a spent model quota, a filing that cannot be read) in `detail`.
-export async function postJson(path, signal) {
-  const res = await fetch(`${API_BASE}${path}`, { method: 'POST', signal })
-  const body = await res.json().catch(() => ({}))
+export async function postJson(path, body, signal) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    signal,
+    ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+  })
+  const data = await res.json().catch(() => ({}))
   if (!res.ok) {
-    const error = new Error(body.detail || `Request failed (${res.status})`)
+    const error = new Error(data.detail || `Request failed (${res.status})`)
     error.status = res.status
     throw error
   }
-  return body
+  return data
 }

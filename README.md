@@ -45,7 +45,11 @@ sources and coverage) so several research tabs can render without rereading fili
   serious filing language) and shows whether the summary covers each item, what it added, and why the rest was left out.
 - `POST /api/research/{ticker}/insights` writes that analysis when it is missing (Gemini free tier: Flash-Lite reads
   the filing text, Flash writes the summary from stored facts; Mistral's free tier is an optional fallback). The
-  legacy `/api/summarize` is used only when the research store cannot serve a company. `GET /api/research/{ticker}/filings` lists the stored filings and their coverage.
+  legacy `/api/summarize` is used only when the research store cannot serve a company.
+- `POST /api/research/{ticker}/chat` answers questions about a company's stored filings ("Ask about this filing" on
+  the page). Each question is answered from the key figures and the filing passages that best match it, and the
+  answer cites the passages. It runs on Groq's free tier (`GROQ_API_KEY`) with Mistral's as the fallback, never on
+  Gemini. `GET /api/research/{ticker}/filings` lists the stored filings and their coverage.
 - `GEMINI_EXTRACT_MODEL` and `GEMINI_SYNTH_MODEL` override the research models (defaults `gemini-3.5-flash-lite` and
   `gemini-3.8-flash`); `GEMINI_MODEL` is the legacy summary's model and the research stages' first fallback (Google
   now limits 2.5 models to projects that already use them). `MISTRAL_API_KEY` enables the last-resort fallback.

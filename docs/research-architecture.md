@@ -222,6 +222,18 @@ guarantee "to provide credit support", an export-control sentence and a cyber-at
 summary citing two of them, 16 went to the model. Measured input with nothing cited (the upper bound): NVIDIA 16
 items, about 1.3k tokens; Microsoft 12, 1.1k; TSMC 4, 0.7k; Suncor 4, 0.6k, plus the summary's own text.
 
+## Filing chat
+
+`research/chat.py`, `POST /api/research/{ticker}/chat`: questions about a company's stored filings, answered without
+fetching anything. Each question gets a small context so it fits Groq's free tier (about 8k tokens a minute on its
+larger models): a digest of key figures and the largest filing changes from the snapshot, and up to 8 filing passages
+(about 7k characters) ranked in code (BM25 over the prose paragraphs of the latest annual and interim reports; the
+previous question adds context at half weight for follow-ups). The model cites passages as [S1]; the cited passages
+come back with the answer, and figures in the answer that the context does not contain are underlined. Groq
+(`openai/gpt-oss-120b`, then `llama-3.3-70b-versatile`) answers, Mistral is the fallback, and Gemini is never used,
+so its quota stays with the filing analysis. The server keeps no conversation state (the page sends the last 8
+turns); questions are capped at 500 characters and 10 a minute per visitor per server instance.
+
 ## Filing-type adapters
 
 `backend/research/adapters.py` is the only layer that knows form types. Each adapter declares its forms, the

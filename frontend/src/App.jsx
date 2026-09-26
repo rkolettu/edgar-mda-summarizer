@@ -8,6 +8,7 @@ import CapitalTab from './components/CapitalTab'
 import ChangesSection from './components/ChangesSection'
 import EarningsTab from './components/EarningsTab'
 import FilingChangesTab from './components/FilingChangesTab'
+import FilingChat from './components/FilingChat'
 import FinancialsTab from './components/FinancialsTab'
 import KpiStrip from './components/KpiStrip'
 import LatestQuarter from './components/LatestQuarter'
@@ -338,6 +339,7 @@ export default function App() {
                 <TabPanel tabKey="risks" active={tab}><RisksTab {...tabProps} /></TabPanel>
                 <TabPanel tabKey="earnings" active={tab}><EarningsTab {...tabProps} /></TabPanel>
                 <TabPanel tabKey="changes" active={tab}><FilingChangesTab research={research.data} /></TabPanel>
+                {research.data.chat?.configured && <FilingChat key={research.data.company.ticker} research={research.data} />}
               </>
             ) : (
               <OverviewPanel summary={summary} />
