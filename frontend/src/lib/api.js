@@ -6,6 +6,10 @@ export async function getJson(path, params, signal) {
   if (res.status === 429) {
     throw new Error('This app uses my Gemini API key and has reached its usage limit. Please try again in about 3 hours.')
   }
-  if (!res.ok) throw new Error(body.detail || `Request failed (${res.status})`)
+  if (!res.ok) {
+    const error = new Error(body.detail || `Request failed (${res.status})`)
+    error.status = res.status
+    throw error
+  }
   return body
 }

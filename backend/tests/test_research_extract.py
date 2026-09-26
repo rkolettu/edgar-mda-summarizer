@@ -211,3 +211,15 @@ def test_real_filings_end_to_end():
     revenue = metrics(suncor, "revenue")[(2025, "FY")]
     # IFRS revenue from contracts with customers is Suncor's gross revenue; the label keeps that visible.
     assert (revenue.value_normalized, revenue.reported_label) == (52_377e6, "Gross revenues")
+
+
+def test_company_specific_tag_is_mapped_by_its_statement_row_when_unambiguous():
+    body = (
+        cover("fy", "10-K", "January 25, 2026", 2026, "FY")
+        + row("Marketable securities", value("acme:MarketableSecuritiesAndEquitySecuritiesFVNI", "fyend", "51,951"))
+        + row("Non-marketable equity securities", value("acme:NonMarketableSecurities", "fyend", "22,251"))
+    )
+    filing = parse(document(body, [context("fy", "2025-01-27", "2026-01-25"), context("fyend", instant="2026-01-25")]))
+    extraction = extract.extract(filing, "10-K")
+    securities = metrics(extraction, "marketable_securities")[(2026, "FY")]
+    assert (securities.value_normalized, securities.confidence_level) == (51_951e6, "medium")

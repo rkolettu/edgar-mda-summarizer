@@ -18,12 +18,15 @@ from pathlib import Path
 from fastapi import HTTPException
 
 import sec
-from research import adapters, db, extract, ixbrl, store
+from research import adapters, db, extract, ixbrl, snapshot, store
 
 log = logging.getLogger("research.ingest")
 
 WATCHLIST = Path(__file__).parent / "watchlist.txt"
-DEFAULT_ANNUAL = 2
+# Three annual reports give five fiscal years of income statements (each carries three); quarters come from the
+# last two fiscal years, whose 10-Qs also carry the prior-year quarters for year-over-year comparison.
+DEFAULT_ANNUAL = 3
+INTERIM_YEARS = 2
 # Pause between filings so a watchlist run stays far below SEC's 10 requests per second.
 PAUSE_SECONDS = 0.3
 
@@ -33,8 +36,9 @@ def read_watchlist(path: Path = WATCHLIST) -> list[str]:
     return [line for line in lines if line]
 
 
-def discover(submissions: dict, annual: int = DEFAULT_ANNUAL) -> list[dict]:
-    """The latest `annual` annual filings plus every supported filing since the oldest of them, oldest first.
+def discover(submissions: dict, annual: int = DEFAULT_ANNUAL, interim_years: int = INTERIM_YEARS) -> list[dict]:
+    """The latest `annual` annual filings, amendments to them, and interim filings from the last `interim_years`
+    fiscal years, oldest first.
 
     Oldest first means originals are stored before their amendments and the company profile ends on the latest filing.
     """
@@ -53,7 +57,19 @@ def discover(submissions: dict, annual: int = DEFAULT_ANNUAL) -> list[dict]:
     annuals = [f for f in filings if f["form"] in extract.ANNUAL_FORMS][:annual]
     if annuals:
         oldest = annuals[-1]["report_date"]
-        selected = [f for f in filings if f["report_date"] and f["report_date"] >= oldest]
+        if len(annuals) >= interim_years:
+            interim_from = annuals[interim_years - 1]["report_date"]
+        elif len(annuals) == annual:
+            interim_from = oldest  # the caller asked for fewer years
+        else:
+            interim_from = ""  # a young filer: every interim report it has
+        selected = [
+            f for f in filings if f["report_date"] and (
+                f in annuals
+                or (extract.base_form(f["form"]) in extract.ANNUAL_FORMS and f["report_date"] >= oldest)
+                or (extract.base_form(f["form"]) not in extract.ANNUAL_FORMS and f["report_date"] >= interim_from)
+            )
+        ]
     else:
         # A recent listing may have no annual report yet.
         selected = filings[:4]
@@ -146,6 +162,12 @@ def ingest_company(conn, query: str, *, annual: int = DEFAULT_ANNUAL, force: boo
             time.sleep(PAUSE_SECONDS)
     store.refresh_company_profile(conn, company_id)
     store.prune_section_text(conn, company_id)
+    changed = any(r["status"] == "ingested" for r in results)
+    stored = store.load_snapshot(conn, company_id)
+    if changed or stored is None or (stored["snapshot_version"], stored["parser_version"]) != (snapshot.SNAPSHOT_VERSION, extract.PARSER_VERSION):
+        snapshot.rebuild(conn, company_id)
+    else:
+        store.mark_checked(conn, company_id)
     return {"ticker": company["ticker"], "cik": cik, "company_id": company_id, "filings": results}
 
 

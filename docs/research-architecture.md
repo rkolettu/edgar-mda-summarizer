@@ -44,13 +44,18 @@ without relying on note numbers or Item numbers. The same parser handles 10-K, 1
 2. **Storage (Neon free tier: 0.5 GB, 100 CU-hours/month, scales to zero after 5 minutes).** Store facts, fact
    sources, section fingerprints, and section text for the filings comparisons read (latest two annual, latest two
    interim); older text is pruned, facts stay. Never store raw HTML or unmapped XBRL: filings never change and can be
-   re-fetched. Measured in phase 1: 36 filings for 8 companies used about 7 MB, roughly 0.9 MB per company. A storage
-   guard (phase 2) evicts the least recently viewed non-showcase companies above about 400 MB.
+   re-fetched. Measured after phase 2 (with disclosure families): 20 filings for 4 companies take 6.2 MB, about
+   1.5-2.5 MB per company. Past 100 non-showcase companies the least recently viewed are evicted (counting companies,
+   because Postgres reuses freed space but never shrinks the file, so file size cannot drive eviction), and new
+   companies are refused above 450 MB of physical size.
 3. **Ingestion.** Showcase companies (`backend/research/watchlist.txt`) are kept current by a daily GitHub Actions job
    (`.github/workflows/ingest.yml`; free for public repositories, no Vercel time limit), so their pages load instantly.
-   Any other ticker is ingested on demand in the request (phase 2): deterministic parsing takes seconds and fits the
-   Vercel Hobby 5-minute function limit; model stages are saved per stage, so a timeout resumes rather than restarts.
-   If the model quota is spent, the deterministic tabs still render and narrative tabs say they are queued.
+   Any other ticker is ingested on demand by `GET /api/research/{ticker}`: deterministic parsing of about ten filings
+   takes 15-60 seconds and fits the Vercel Hobby 5-minute function limit; later requests read the stored snapshot
+   (about 30 ms) and EDGAR is rechecked at most daily. A second request for a company already being parsed waits for
+   the first instead of building a partial snapshot. Model stages (phase 4) will be saved per stage, so a timeout
+   resumes rather than restarts. The page shows the stored tabs as soon as they arrive; if the model quota is spent,
+   those tabs still render and the Overview says the summary is unavailable.
 4. **Model: stay on the Gemini free tier.** Google no longer publishes fixed free limits (see AI Studio for the
    project's own); recent reports put Flash-Lite near 500 requests/day and Flash near 20/day, and 2.5 models are now
    limited to projects that already use them (`GEMINI_MODEL` overrides the model). Plan for phase 4: extraction on
@@ -59,7 +64,7 @@ without relying on note numbers or Item numbers. The same parser handles 10-K, 1
    models were withdrawn.
 5. **One snapshot payload per company** with every tab; source text loads on click.
 
-## Schema (migration 001)
+## Schema (migrations 001-002)
 
 | Table | Holds |
 |---|---|
@@ -69,10 +74,15 @@ without relying on note numbers or Item numbers. The same parser handles 10-K, 1
 | `facts` | Stable `fact_key` (e.g. `metric.revenue`), canonical metric, reported label, XBRL concept, dimensions, reported and normalized value, unit, scale, currency, period and fiscal labels, comparative flag, extraction method, confidence; columns for disclosure status and materiality filled by later phases |
 | `fact_sources` | Where each fact appears: document, element id, table row or sentence, section |
 | `analysis_runs` | One row per stage per filing: tokens, model, status; a unique partial index doubles as a lock so concurrent requests never pay twice |
+| `member_aliases` | A company renamed a category between filings: old key, new key, how it was linked, evidence |
+| `research_snapshots` | One JSON payload per company with every tab's data, its versions, and when EDGAR was last checked |
 
-Planned: `fact_comparisons` (sequential, vs annual, YoY deltas; recomputed when filings arrive), `member_aliases`
-(company renames of XBRL categories), `candidates` (materiality triggers), `insights` (tab insights with fact and
-source ids and verification), `research_snapshots`.
+Planned: `fact_comparisons` (sequential, vs annual, YoY deltas; recomputed when filings arrive), `candidates`
+(materiality triggers), `insights` (tab insights with fact and source ids and verification).
+
+Derived metrics (margins, growth, free cash flow, cash conversion, net cash, receivable and inventory days, discrete
+quarters from year-to-date totals) are computed in `research/metrics.py` when the snapshot is built, never stored as
+facts and never produced by a model; a restated period takes the latest filing's value.
 
 ## Deterministic vs. model responsibilities
 
@@ -127,7 +137,7 @@ acquisitions, 2.03 debt or guarantees, 2.05/2.06 restructuring or impairment, 4.
 | Phase | Scope | Status |
 |---|---|---|
 | 1 Foundation | Migrations; generic filing model; inline XBRL parser; metric mapping (US GAAP, IFRS); note sections; adapters for 10-K, 10-Q, 20-F, 40-F; ingest CLI and daily workflow; read-only `GET /api/research/{ticker}/filings`; token logging | **Done** |
-| 2 Deterministic facts | Dimensional families (commitments, guarantees, debt, investments, capital return, non-operating, impairments, inventory charges, concentration, segments); alias bridging; derived metrics and working capital; 5-year history backfill; snapshot builder; on-demand ingestion with storage guard; tab frame, Financials tab, Capital & Commitments numbers | Next |
+| 2 Deterministic facts | Disclosure families (commitments, guarantees, debt, investments, capital return, non-operating and unusual items, customer concentration, backlog, taxes) and segment, geographic and product revenue; renamed-category linking; derived metrics and working capital; 5-year history from three annual reports; snapshot builder; on-demand `GET /api/research/{ticker}` with storage guard; tab frame, Financials tab, Capital & Commitments tab | **Done** |
 | 3 Compare and score | `fact_comparisons`, disclosure status, paragraph fingerprints and narrative diffs, trigger phrases, materiality; Filing Changes tab | |
 | 4 Interpretation | Calls A and B, insights bound to fact ids, verification; Overview, Business & Strategy, Risks, Earnings Quality | |
 | 5 Audit and robustness | Call C; full-text and model fallbacks; 6-K, 8-K; messy-filer regression set | |
@@ -146,6 +156,28 @@ gaps in the existing narrative extractors, which also affect the current page:
 - IFRS revenue is not always the headline figure: Suncor tags gross revenues as `RevenueFromContractsWithCustomers`
   while it reports revenue net of royalties; the stored reported label ("Gross revenues") keeps that visible.
 
+## Phase 2 findings
+
+Live runs on NVIDIA, Microsoft, TSMC and Suncor, all from tags, with no model:
+
+- NVIDIA's supply and capacity commitments read $95.2B (FY26 10-K), $119B (Q1) and $279B (Q2), although NVIDIA renamed
+  the category between Q1 and Q2: the Q2 filing repeats April's $119B under the new name, which links the two.
+  "Multi-year cloud service agreement commitments" became "Cloud service agreement commitments" with no repeated
+  value; names that differ only by dropped qualifiers, with amounts in a plausible range, are linked too. A generic
+  match ("Other commitments" inside "Future purchase and other commitments") is rejected. The $105B SB Energy
+  guarantee shows as new, and its post-quarter value as a subsequent event.
+- Microsoft tags $329.1B of data center leases not yet commenced (twice, as finance and operating leases, from one
+  sentence; merged into one item) and a $13B equity-method funding commitment; Microsoft's own product renames
+  (Gaming to Xbox) link through repeated values.
+- TSMC tags US dollar convenience translations beside its NT dollar amounts; the reporting currency wins.
+- NVIDIA moved marketable securities from a standard tag to its own tag and then split it in two; a company tag whose
+  statement row reads exactly like a metric maps at medium confidence, and net cash is left blank rather than shown
+  understated when a component the company normally reports is missing.
+- Not linked yet (left for the phase 5 model mapping): NVIDIA's "Operating lease not yet commenced" and "Data center
+  lease not yet commenced" share no distinctive words; customers are anonymized and relabeled between filings.
+- The chart palette's orange and teal failed the dataviz validator's color-vision check (protan delta E 5.6); both were
+  resaturated within their hues and now pass.
+
 ## Operating it
 
 ```bash
@@ -154,6 +186,9 @@ DATABASE_URL=postgres://... SEC_USER_AGENT="App name contact@email" python -m re
 python -m research.ingest --watchlist          # showcase companies
 python -m research.ingest NVDA --force         # re-parse at the current parser version
 ```
+
+`GET /api/research/{ticker}` returns a company's snapshot (ingesting it on first request); `GET
+/api/research/{ticker}/filings` lists stored filings with their coverage.
 
 The scheduled workflow needs repository secrets `DATABASE_URL` and `SEC_USER_AGENT`; until they exist it skips with
 a notice. GitHub pauses scheduled workflows in public repositories after 60 days without commits; re-enable it from

@@ -103,7 +103,9 @@ def rows(conn, sql, *params):
 
 def test_migrations_apply_once(research_conn):
     assert db.apply_migrations(research_conn) == []
-    assert rows(research_conn, "SELECT version, name FROM schema_migrations") == [(1, "001_core")]
+    assert rows(research_conn, "SELECT version, name FROM schema_migrations ORDER BY version") == [
+        (1, "001_core"), (2, "002_aliases_snapshots"),
+    ]
 
 
 def test_discover_keeps_latest_annuals_and_later_filings_oldest_first():
@@ -117,6 +119,15 @@ def test_discover_keeps_latest_annuals_and_later_filings_oldest_first():
         ("10-Q/A", "2026-04-26"), ("10-Q", "2026-07-26"),
     ]
     assert [f["form"] for f in ingest.discover(payload, annual=1)] == ["10-K", "10-Q", "10-Q/A", "10-Q"]
+
+
+def test_discover_takes_every_interim_report_of_a_young_filer():
+    payload = submissions_payload("x", [
+        {"form": f, "accessionNumber": str(i), "primaryDocument": "d.htm", "filingDate": rd, "reportDate": rd}
+        for i, (f, rd) in enumerate([("10-Q", "2026-06-30"), ("10-K", "2025-12-31"), ("10-Q", "2025-09-30"), ("10-Q", "2025-06-30")])
+    ])
+    assert [f["report_date"] for f in ingest.discover(payload)] == ["2025-06-30", "2025-09-30", "2025-12-31", "2026-06-30"]
+    assert [f["report_date"] for f in ingest.discover(payload, annual=1)] == ["2025-12-31", "2026-06-30"]
 
 
 def test_ingest_stores_facts_sections_and_sources(research_conn, nvda_sec):

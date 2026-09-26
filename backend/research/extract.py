@@ -16,9 +16,11 @@ from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
 from research import concepts
-from research.ixbrl import Fact, IxbrlFiling, Period
+from research.ixbrl import Fact, IxbrlFiling, Period, local_name
 
-PARSER_VERSION = 1
+# Bump when extraction changes; stored filings at an older version are re-parsed on the next ingest.
+# 2: disclosure families (commitments, guarantees, debt, ...) and segment breakdowns.
+PARSER_VERSION = 2
 
 ANNUAL_FORMS = {"10-K", "10-KT", "20-F", "40-F"}
 YEAR_DAYS = 365.25
@@ -127,6 +129,7 @@ class FactRecord:
     parser_confidence: float
     sources: list[SourceRecord] = field(default_factory=list)
     text_value: str | None = None
+    triggers: list[str] = field(default_factory=list)
 
     @property
     def dimensions_hash(self) -> str:
@@ -317,6 +320,18 @@ def _extension_candidates(metric: concepts.Metric, facts_by_concept: dict[str, l
     return found
 
 
+def _label_candidates(metric: concepts.Metric, facts_by_concept: dict[str, list[Fact]]) -> list[str]:
+    """Company-specific concepts whose statement row reads exactly like the metric ("Marketable securities")."""
+    found = []
+    for concept, facts in facts_by_concept.items():
+        if concept.split(":", 1)[0] in ("us-gaap", "ifrs-full", "dei", "srt", "ecd"):
+            continue
+        labels = {concepts.label_key(o.row_label) for f in facts for o in f.occurrences if o.row_label}
+        if any(concepts.REPORTED_LABEL_METRICS.get(label) == metric.key for label in labels):
+            found.append(concept)
+    return found
+
+
 STANDARD_CONFIDENCE = 0.95
 FALLBACK_CONFIDENCE = 0.9
 EXTENSION_CONFIDENCE = 0.6
@@ -324,6 +339,7 @@ CONFLICT_PENALTY = 0.25
 
 
 def metric_facts(filing: IxbrlFiling, meta: FilingMeta, section_headings: dict[str, str]) -> tuple[list[FactRecord], list[str]]:
+    """Headline statement values: one consolidated (undimensioned) value per metric and period."""
     warnings: list[str] = []
     facts_by_concept: dict[str, list[Fact]] = defaultdict(list)
     for fact in filing.facts:
@@ -340,7 +356,7 @@ def metric_facts(filing: IxbrlFiling, meta: FilingMeta, section_headings: dict[s
                 if _period_fits(metric, fact.context.period) and _unit_fits(metric, fact.unit, currency):
                     chosen.setdefault(fact.context.period, (fact, confidence))
         if not chosen:
-            candidates = _extension_candidates(metric, facts_by_concept)
+            candidates = _extension_candidates(metric, facts_by_concept) or _label_candidates(metric, facts_by_concept)
             if len(candidates) == 1:
                 for fact in facts_by_concept[candidates[0]]:
                     if _period_fits(metric, fact.context.period) and _unit_fits(metric, fact.unit, currency):
@@ -352,6 +368,10 @@ def metric_facts(filing: IxbrlFiling, meta: FilingMeta, section_headings: dict[s
                 confidence -= CONFLICT_PENALTY
             records.append(_metric_record(metric, fact, period, confidence, meta, section_headings))
     return records, warnings
+
+
+def metric_concept_periods(records: list[FactRecord]) -> set[tuple[str, Period]]:
+    return {(r.xbrl_concept, Period(r.period_start, r.period_end)) for r in records}
 
 
 def _metric_record(metric, fact: Fact, period: Period, confidence: float, meta: FilingMeta, section_headings) -> FactRecord:
@@ -381,14 +401,165 @@ def _metric_record(metric, fact: Fact, period: Period, confidence: float, meta: 
         fiscal_year=fiscal_year,
         fiscal_period=fiscal_period,
         period_months=period_months(period),
-        is_comparative=meta.period_end is not None and period.end != meta.period_end,
+        is_comparative=is_comparative(period, meta),
         extraction_method="xbrl",
         parser_confidence=round(confidence, 3),
-        sources=[
-            SourceRecord(o.document, o.element_id, o.row_text, None, o.text_block_id, section_headings.get(o.text_block_id or ""))
-            for o in fact.occurrences
-        ],
+        sources=_sources(fact, section_headings),
     )
+
+
+def is_comparative(period: Period, meta: FilingMeta) -> bool:
+    """An earlier period the filing repeats for comparison; values dated after the report (subsequent events) are not."""
+    return meta.period_end is not None and period.end < meta.period_end
+
+
+def _sources(fact: Fact, section_headings: dict[str, str]) -> list[SourceRecord]:
+    return [
+        SourceRecord(o.document, o.element_id, o.row_text, None, o.text_block_id, section_headings.get(o.text_block_id or ""))
+        for o in fact.occurrences
+    ]
+
+
+# --- disclosure families ---
+
+STANDARD_PREFIXES = ("us-gaap", "ifrs-full", "srt", "dei")
+FAMILY_CONFIDENCE = 0.9
+EXTENSION_FAMILY_CONFIDENCE = 0.7
+
+
+def _normalized_unit(unit: str | None) -> str:
+    if not unit:
+        return "other"
+    if unit == "xbrli:pure":
+        return "ratio"
+    if unit == "xbrli:shares":
+        return "shares"
+    if unit.startswith("iso4217:"):
+        return "currency_per_share" if unit.endswith("/xbrli:shares") else "currency" if "/" not in unit else "other"
+    return "other"
+
+
+def family_facts(filing: IxbrlFiling, meta: FilingMeta, section_headings: dict[str, str],
+                 taken: set[tuple[str, Period]]) -> list[FactRecord]:
+    """Values behind the headline statements: commitments by category, guarantees, debt, investment gains,
+    capital return programs, unusual items, customer concentration, and segment, geographic and product revenue.
+
+    Keys name the family, the concept and each category (member), so the same line can be followed across filings;
+    a subsequent-event axis is kept in the dimensions but not the key, and flags the value instead."""
+    # Revenue concepts break out by segment, geography and product alike, so each concept maps to every breakdown and
+    # the fact's axis picks one.
+    breakdown_ranks: dict[str, list[tuple]] = defaultdict(list)
+    for family, axes, metric_keys in concepts.BREAKDOWNS:
+        for metric in metric_keys:
+            for rank, concept in enumerate(concepts.METRICS_BY_KEY[metric].us_gaap + concepts.METRICS_BY_KEY[metric].ifrs):
+                for prefix in ("us-gaap", "ifrs-full"):
+                    breakdown_ranks[f"{prefix}:{concept}"].append((family, metric, rank, axes))
+    chosen: dict[tuple, tuple[tuple, FactRecord]] = {}
+    for fact in filing.facts:
+        if fact.value is None:
+            continue
+        period = fact.context.period
+        dims = dict(fact.context.dimensions)
+        subsequent = any(local_name(axis) == concepts.SUBSEQUENT_EVENT_AXIS for axis in dims)
+        key_dims = sorted(
+            (axis, member) for axis, member in dims.items()
+            if local_name(axis) != concepts.SUBSEQUENT_EVENT_AXIS
+            and (local_name(axis), local_name(member)) not in concepts.NEUTRAL_MEMBERS
+        )
+        if not key_dims and (fact.concept, period) in taken:
+            continue  # already stored as a headline metric
+        axes = {local_name(axis) for axis, _ in key_dims}
+
+        rank = 0
+        breakdown = next((b for b in breakdown_ranks.get(fact.concept, ()) if len(key_dims) == 1 and axes <= b[3]), None)
+        if breakdown:
+            family_key, metric, rank, _ = breakdown
+            fact_type = "segment_metric"
+            key = f"{family_key}.{metric}." + concepts.slug(key_dims[0][1])
+            label = concepts.member_label(*key_dims[0])
+            if metric != "revenue":
+                label += f" ({concepts.METRICS_BY_KEY[metric].label.lower()})"
+        else:
+            family = concepts.family_for(fact.concept, axes)
+            if family is None:
+                continue
+            family_key, fact_type = family.key, family.fact_type
+            key = ".".join([family.key, concepts.slug(fact.concept)] + [concepts.slug(member) for _, member in key_dims])
+            members = ", ".join(concepts.member_label(axis, member) for axis, member in key_dims)
+            name = local_name(fact.concept)
+            if family.key == "customer_concentration":
+                label = concepts.concentration_label(key_dims)
+            elif members and name in concepts.MEMBER_NAMES_VALUE:
+                label = members
+            else:
+                label = concepts.concept_label(fact.concept) + (f": {members}" if members else "")
+
+        confidence = FAMILY_CONFIDENCE if fact.concept.split(":", 1)[0] in STANDARD_PREFIXES else EXTENSION_FAMILY_CONFIDENCE
+        if fact.conflicting:
+            confidence -= CONFLICT_PENALTY
+        fiscal_year, fiscal_period = meta.calendar.label(period) if meta.calendar else (None, None)
+        record = FactRecord(
+            fact_key=key,
+            fact_type=fact_type,
+            category=family_key,
+            subcategory="subsequent_event" if subsequent else None,
+            canonical_metric=None,
+            label=label,
+            reported_label=next((o.row_label for o in fact.occurrences if o.row_label), None),
+            xbrl_concept=fact.concept,
+            dimensions={axis: member for axis, member in sorted(dims.items())},
+            value_reported=fact.display_value,
+            reported_scale=fact.scale,
+            reported_unit=fact.unit,
+            reported_currency=currency_of(fact.unit),
+            value_normalized=fact.value,
+            normalized_unit=_normalized_unit(fact.unit),
+            currency=currency_of(fact.unit),
+            decimals=fact.decimals,
+            accounting_standard=meta.accounting_standard,
+            period_type="instant" if period.is_instant else "duration",
+            period_start=period.start,
+            period_end=period.end,
+            fiscal_year=fiscal_year,
+            fiscal_period=fiscal_period,
+            period_months=period_months(period),
+            is_comparative=is_comparative(period, meta),
+            extraction_method="xbrl",
+            parser_confidence=round(confidence, 3),
+            sources=_sources(fact, section_headings),
+            triggers=["subsequent_event"] if subsequent else [],
+        )
+        slot = (key, period, record.dimensions_hash)
+        # The first-listed revenue concept wins a segment's period, as for the consolidated metric; a convenience
+        # translation (TSMC tags US dollar twins of its NT dollar amounts) yields to the reporting currency.
+        preference = (record.currency != meta.reporting_currency, rank)
+        if slot not in chosen or preference < chosen[slot][0]:
+            chosen[slot] = (preference, record)
+    return _merge_repeated_tags([record for _, record in chosen.values()])
+
+
+def _merge_repeated_tags(records: list[FactRecord]) -> list[FactRecord]:
+    """One amount tagged under several categories of the same axis from the same sentence is one disclosure
+    (Microsoft tags its $329.1B of uncommenced leases as both finance and operating leases). Equal amounts on
+    different rows (NVIDIA's two $25B commitments) stay separate."""
+    merged: dict[tuple, FactRecord] = {}
+    out = []
+    for record in records:
+        axes = tuple(sorted(a for a in record.dimensions if local_name(a) != concepts.SUBSEQUENT_EVENT_AXIS))
+        text = record.sources[0].source_text if record.sources else None
+        if len(axes) != 1 or not text:
+            out.append(record)
+            continue
+        slot = (record.category, record.xbrl_concept, record.period_start, record.period_end, record.value_normalized,
+                record.currency, axes, text)
+        first = merged.get(slot)
+        if first is None:
+            merged[slot] = record
+            out.append(record)
+        else:
+            first.label = f"{first.label} / {concepts.member_label(axes[0], record.dimensions[axes[0]])}"
+            first.sources.extend(record.sources[: max(0, 3 - len(first.sources))])
+    return out
 
 
 # --- sections ---
@@ -440,7 +611,7 @@ def coverage(sections: list[SectionRecord], facts: list[FactRecord], expected: t
             entry["confidence"] = max(entry["confidence"], section.confidence)
     for category in expected:
         report.setdefault(category, {"found": False, "tier": None, "confidence": 0.0})
-    found_metrics = {f.canonical_metric for f in facts if not f.is_comparative}
+    found_metrics = {f.canonical_metric for f in facts if f.canonical_metric and not f.is_comparative}
     report["financial_statements"] = {
         "found": bool(found_metrics),
         "tier": "xbrl" if found_metrics else None,
@@ -465,6 +636,7 @@ def extract(filing: IxbrlFiling, edgar_form: str, expected: tuple[str, ...] = ()
     headings = {s.ref: s.heading for s in sections if s.heading}
     sections += [replace(s, ordinal=len(sections) + i) for i, s in enumerate(extra_sections)]
     facts, warnings = metric_facts(filing, meta, headings)
+    facts += family_facts(filing, meta, headings, metric_concept_periods(facts))
     report = coverage(sections, facts, expected)
     if not report["financial_statements"]["found"]:
         warnings.append("No headline financial statement values were found in the tagged data.")

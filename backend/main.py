@@ -22,6 +22,7 @@ import financials
 import sec
 import verify
 from research import db as research_db
+from research import service as research_service
 from research import store as research_store
 
 # Filings never change once filed, so a finished analysis can be served from Vercel's CDN for a day;
@@ -330,6 +331,16 @@ def run_pipeline(query: str) -> tuple[dict, bool]:
         db_key = str(cache_key)
         cache.db_cache.put(db_key, response)
     return response, degraded
+
+
+@router.get("/research/{ticker}")
+def research_snapshot(response: Response, ticker: str):
+    """Every research tab's data for a company, from the stored snapshot; ingests the company on first request."""
+    if not research_db.database_url():
+        raise HTTPException(status_code=503, detail="The research store is not configured.")
+    result = json_errors(research_service.get_snapshot, ticker)
+    response.headers["Cache-Control"] = RESEARCH_CACHE_CONTROL
+    return result
 
 
 @router.get("/research/{ticker}/filings")

@@ -10,13 +10,11 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { CHART_CHROME, SERIES } from '../lib/colors'
+import { AXIS_TICK, CHART_CHROME, SERIES } from '../lib/colors'
 import { fiscalYearLabel, formatPct, formatUsd } from '../lib/format'
 import { ChartCard, EmptyChart } from './ChartCard'
 
-const AXIS_TICK = { fill: CHART_CHROME.tick, fontSize: 11 }
-
-function Legend({ series }) {
+export function Legend({ series }) {
   return (
     <ul className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-2">
       {series.map((s) => (
@@ -29,7 +27,7 @@ function Legend({ series }) {
   )
 }
 
-function SeriesTooltip({ active, payload, label, series, format }) {
+export function SeriesTooltip({ active, payload, label, series, format }) {
   if (!active || !payload?.length) return null
   const row = payload[0].payload
   return (

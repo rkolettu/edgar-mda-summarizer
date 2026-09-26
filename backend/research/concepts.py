@@ -129,6 +129,24 @@ METRICS: list[Metric] = [
 METRICS_BY_KEY = {m.key: m for m in METRICS}
 
 
+# How statements commonly word a line, for company-specific tags whose name follows no standard concept
+# (NVIDIA tags "Marketable securities" as nvda:MarketableSecuritiesAndEquitySecuritiesFVNI).
+REPORTED_LABEL_METRICS = {
+    "marketable securities": "marketable_securities", "short-term investments": "marketable_securities",
+    "revenue": "revenue", "revenues": "revenue", "total revenue": "revenue", "total revenues": "revenue",
+    "net revenue": "revenue", "net revenues": "revenue", "net sales": "revenue", "total net sales": "revenue",
+    "operating income": "operating_income", "income from operations": "operating_income",
+    "net income": "net_income", "cash and cash equivalents": "cash", "total assets": "total_assets",
+    "inventories": "inventory", "inventory": "inventory", "accounts receivable, net": "accounts_receivable",
+    "accounts payable": "accounts_payable", "total liabilities": "total_liabilities",
+    "capital expenditures": "capex", "purchases of property and equipment": "capex",
+}
+
+
+def label_key(label: str | None) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"\(\w\)|[:*]", "", label or "")).strip().lower()
+
+
 def metric_concepts(metric: Metric, standard: str) -> list[str]:
     """Standard concepts for a metric, the filer's own taxonomy first."""
     us = [f"us-gaap:{c}" for c in metric.us_gaap]
@@ -203,3 +221,211 @@ def text_block_categories(concept: str) -> tuple[str, ...]:
         if pattern.search(name):
             return categories
     return ("other",)
+
+
+# --- disclosure families: values the statements' headline lines do not capture ---
+
+@dataclass(frozen=True)
+class Family:
+    key: str                          # commitment, guarantee, debt, ...
+    fact_type: str
+    concepts: re.Pattern              # matched against the concept's local name
+    axes: frozenset[str] | None       # allowed dimension axes (local names); None allows any, empty only totals
+    exclude: re.Pattern | None = None
+
+
+def _family(key, fact_type, concepts, axes=None, exclude=None) -> Family:
+    return Family(key, fact_type, re.compile(concepts), None if axes is None else frozenset(axes),
+                  re.compile(exclude) if exclude else None)
+
+
+SEGMENT_AXES = {"StatementBusinessSegmentsAxis", "SegmentsAxis"}
+GEOGRAPHY_AXES = {"StatementGeographicalAxis", "GeographicalAreasAxis"}
+PRODUCT_AXES = {"ProductOrServiceAxis", "ProductsAndServicesAxis"}
+CONCENTRATION_AXES = {"ConcentrationRiskByBenchmarkAxis", "ConcentrationRiskByTypeAxis", "MajorCustomersAxis",
+                      "StatementGeographicalAxis", "EquitySecuritiesByIndustryAxis"}
+# Breakdowns that restate a total rather than disclose something new.
+NOISE_AXES = {
+    "StatementEquityComponentsAxis", "FairValueByFairValueHierarchyLevelAxis", "FairValueByMeasurementFrequencyAxis",
+    "FairValueByMeasurementBasisAxis", "RangeAxis", "ConsolidatedEntitiesAxis", "LegalEntityAxis",
+    "RevenueRemainingPerformanceObligationExpectedTimingOfSatisfactionStartDateAxis",
+    "FinancingReceivablePortfolioSegmentAxis", "FinancingReceivableRecordedInvestmentByClassOfFinancingReceivableAxis",
+    "MaturityAxis", "ContractualObligationFiscalYearMaturityScheduleAxis",
+}
+# Maturity-by-year splits, running totals and ratios of a disclosure are left out; the total is kept.
+NOISE_CONCEPTS = re.compile(
+    r"DueIn|Due(After|Within)|Remainder|Thereafter|Anniversary|Expiring|FutureMinimumPayments|NextTwelveMonths"
+    r"|AfterYear|Year(One|Two|Three|Four|Five)|Accumulated|EvaluatedForImpairment|Reconciliation|Allowance"
+    r"|InterestRate|Percentage(?!1$)|NumberOf|Weighted|Term$|Period$|Duration"
+)
+SUBSEQUENT_EVENT_AXIS = "SubsequentEventTypeAxis"
+# Neutral members that do not change what a value measures.
+NEUTRAL_MEMBERS = {("ConsolidationItemsAxis", "OperatingSegmentsMember")}
+
+FAMILIES: list[Family] = [
+    # "Guarantee deposits" (TSMC) are security deposits held or paid, not guarantees given.
+    _family("guarantee", "guarantee", r"Guarant|LettersOfCredit|CreditSupport", exclude=r"Collateral|Payables$|Fee|Deposit"),
+    _family("commitment", "commitment",
+            r"OtherCommitment$|PurchaseObligation|ContractualObligation$|PurchaseCommitment|UnrecordedUnconditional"
+            r"|RecordedUnconditional|FundingCommitment|CommitmentsContractualAmount|LendingRelated(Financial)?Commitments"
+            r"|UnfundedCommitment|CapitalCommitment|ContractualCommitment",
+            exclude=r"Allowance|Fee"),
+    _family("debt", "debt",
+            r"^LongTermDebt$|^LongTermDebtCurrent$|^LongTermDebtNoncurrent$|^CommercialPaper$|^ShortTermBorrowings$"
+            r"|DebtInstrumentFaceAmount|DebtInstrumentCarryingAmount|LineOfCreditFacilityMaximumBorrowingCapacity"
+            r"|ProceedsFromIssuanceOf(LongTerm|Senior|Convertible)?\w*Debt|RepaymentsOf\w*Debt|ProceedsFromRepaymentsOfCommercialPaper"
+            r"|^Borrowings$|^LongtermBorrowings$|^ShorttermBorrowings$|^BondsIssued$|ProceedsFromIssueOfBonds|RepaymentsOfBonds"
+            r"|ProceedsFrom(Non)?[Cc]urrentBorrowings|RepaymentsOf(Non)?[Cc]urrentBorrowings",
+            axes={"DebtInstrumentAxis", "LongtermDebtTypeAxis", "ShortTermDebtTypeAxis", "LineOfCreditFacilityAxis",
+                  "CreditFacilityAxis", "BorrowingsByNameAxis", "ClassesOfBorrowingsAxis"}),
+    _family("investment", "investment",
+            r"EquitySecuritiesFvNi(Gain|Unrealized|Realized)|GainLossOnInvestments|MarketableSecurities(Realized|Unrealized)GainLoss"
+            r"|^EquityMethodInvestments$|IncomeLossFromEquityMethodInvestments|PaymentsToAcquire(EquityMethod|Other)?Investments"
+            r"|PaymentsToAcquireEquitySecurities|ShareOfProfitLossOfAssociates|InvestmentsInAssociates",
+            axes={"FinancialInstrumentAxis", "ScheduleOfEquityMethodInvestmentEquityMethodInvesteeNameAxis",
+                  "InvestmentTypeAxis", "EquityMethodInvesteeNameAxis"}),
+    _family("capital_return", "capital_return",
+            r"StockRepurchaseProgram(Authorized|RemainingAuthorized)|StockRepurchased(AndRetired)?DuringPeriodValue"
+            r"|CommonStockDividendsPerShareDeclared|DividendsRecognisedAsDistributionsToOwnersPerShare",
+            axes={"ShareRepurchaseProgramAxis"}),
+    _family("non_operating", "non_operating_income",
+            r"InvestmentIncomeInterest$|InterestExpenseNonoperating|ForeignCurrencyTransactionGainLoss|^FinanceIncome$"
+            r"|^OtherGainsLosses$|OtherNonoperatingIncome$|OtherNonoperatingExpense$", axes=()),
+    _family("unusual_item", "unusual_item",
+            r"Impairment|WriteDown|Writedown|Restructuring(Charges|AndRelatedCostIncurredCost)|LitigationSettlement"
+            r"|BusinessCombinationAcquisitionRelatedCosts|GainLossOnDispositionOfAssets|GainLossOnSaleOf",
+            axes={"RestructuringPlanAxis", "FinancialInstrumentAxis"}, exclude=r"Reversal|Recovery|Test"),
+    _family("customer_concentration", "customer_concentration", r"^ConcentrationRiskPercentage1$", axes=CONCENTRATION_AXES),
+    _family("backlog", "operating_metric", r"^RevenueRemainingPerformanceObligation$", axes=()),
+    _family("tax", "tax_item", r"^EffectiveIncomeTaxRateContinuingOperations$|^UnrecognizedTaxBenefits$", axes=()),
+]
+
+BREAKDOWNS = [
+    # (family, axes, metric keys whose concepts are broken out)
+    ("segment", SEGMENT_AXES, ("revenue", "operating_income")),
+    ("geography", GEOGRAPHY_AXES, ("revenue",)),
+    ("product", PRODUCT_AXES, ("revenue",)),
+]
+
+FAMILY_LABELS = {
+    "guarantee": "Guarantees", "commitment": "Commitments", "debt": "Debt", "investment": "Investments",
+    "capital_return": "Capital return", "non_operating": "Non-operating items", "unusual_item": "Unusual items",
+    "customer_concentration": "Customer concentration", "backlog": "Remaining performance obligations",
+    "tax": "Income taxes", "segment": "Segments", "geography": "Geography", "product": "Products and services",
+}
+
+
+def family_for(concept: str, axes: set[str]) -> Family | None:
+    """The disclosure family a tagged value belongs to, or None when it is noise or not tracked."""
+    name = concept.split(":", 1)[-1]
+    if NOISE_CONCEPTS.search(name) or axes & NOISE_AXES:
+        return None
+    for family in FAMILIES:
+        if not family.concepts.search(name) or (family.exclude and family.exclude.search(name)):
+            continue
+        if family.axes is not None and not axes <= family.axes:
+            return None
+        return family
+    return None
+
+
+WORD = re.compile(r"[A-Z]+(?=[A-Z][a-z]|\d|\b|_|$)|[A-Z]?[a-z]+|\d+")
+SMALL_WORDS = {"and", "of", "for", "the", "to", "in", "on", "or", "by", "with", "from", "at", "not", "yet"}
+
+
+def humanize(qname: str, proper_name: bool = False) -> str:
+    """'nvda:AICloudPartnershipCommitmentsMember' -> 'AI cloud partnership commitments'.
+
+    proper_name keeps each word capitalized, for counterparties and investees ('SB Energy Corp')."""
+    name = qname.split(":", 1)[-1]
+    name = re.sub(r"(Member|Axis|Domain)$", "", name)
+    name = re.sub(r"^Ifrs(?=[A-Z])", "", name)
+    words = WORD.findall(name) or [name]
+    out = []
+    for i, word in enumerate(words):
+        if word.isupper():
+            out.append(word)  # acronyms, and letters naming anonymized parties ("Customer A")
+        elif i and word.lower() in SMALL_WORDS:
+            out.append(word.lower())
+        elif proper_name:
+            out.append(word[0].upper() + word[1:])
+        else:
+            out.append(word.lower() if i else word.capitalize())
+    return " ".join(out)
+
+
+# Axes whose members name a party, so their capitalization is kept.
+PROPER_NAME_AXES = re.compile(r"Name|Counterparty|Investee|Acquiree|BusinessAcquisition")
+
+
+def member_label(axis: str, member: str) -> str:
+    return humanize(member, proper_name=bool(PROPER_NAME_AXES.search(axis.split(":", 1)[-1])))
+
+
+def slug(qname: str) -> str:
+    name = qname.split(":", 1)[-1]
+    name = re.sub(r"(Member|Axis|Domain)$", "", name)
+    return "_".join(w.lower() for w in WORD.findall(name)) or re.sub(r"\W+", "_", name.lower())
+
+
+# Labels for concepts whose taxonomy names read badly; categories (members) otherwise name the value.
+CONCEPT_LABELS = {
+    "OtherCommitment": "Other commitments",
+    "UnrecordedUnconditionalPurchaseObligationBalanceSheetAmount": "Purchase obligations",
+    "PurchaseObligation": "Purchase obligations",
+    "ContractualObligation": "Contractual obligations",
+    "GuaranteeObligationsMaximumExposure": "Guarantees (maximum exposure)",
+    "GuaranteeObligationsCurrentCarryingValue": "Guarantees (carrying value)",
+    "LongTermDebt": "Long-term debt",
+    "LongTermDebtCurrent": "Current portion of long-term debt",
+    "LongTermDebtNoncurrent": "Long-term debt, noncurrent",
+    "DebtInstrumentFaceAmount": "Debt principal",
+    "DebtInstrumentCarryingAmount": "Debt carrying amount",
+    "LineOfCreditFacilityMaximumBorrowingCapacity": "Credit facility capacity",
+    "EquitySecuritiesFvNiUnrealizedGainLoss": "Unrealized gains (losses) on equity securities",
+    "EquitySecuritiesFvNiRealizedGainLoss": "Realized gains (losses) on equity securities",
+    "EquitySecuritiesFvNiGainLoss": "Gains (losses) on equity securities",
+    "StockRepurchaseProgramAuthorizedAmount1": "Repurchase program authorized",
+    "StockRepurchaseProgramRemainingAuthorizedRepurchaseAmount1": "Repurchase authorization remaining",
+    "StockRepurchasedAndRetiredDuringPeriodValue": "Shares repurchased",
+    "StockRepurchasedDuringPeriodValue": "Shares repurchased",
+    "CommonStockDividendsPerShareDeclared": "Dividends declared per share",
+    "ConcentrationRiskPercentage1": "Concentration",
+    "RevenueRemainingPerformanceObligation": "Remaining performance obligations",
+    "EffectiveIncomeTaxRateContinuingOperations": "Effective tax rate",
+    "PaymentsToAcquireEquitySecuritiesFvNi": "Purchases of equity securities",
+    "GainLossOnInvestments": "Gains (losses) on investments",
+    "InventoryWriteDown": "Inventory write-downs",
+    "AssetImpairmentCharges": "Asset impairments",
+    "GoodwillImpairmentLoss": "Goodwill impairment",
+    "InvestmentIncomeInterest": "Interest income",
+    "InterestExpenseNonoperating": "Interest expense",
+    "IncomeLossFromEquityMethodInvestments": "Income from equity-method investments",
+    "PaymentsToAcquireInvestments": "Purchases of investments",
+    "EquityMethodInvestments": "Equity-method investments",
+    "UnrecognizedTaxBenefits": "Unrecognized tax benefits",
+}
+# Concepts whose category alone names the value ("Supply and capacity commitments", "Customer A").
+MEMBER_NAMES_VALUE = {
+    "OtherCommitment", "UnrecordedUnconditionalPurchaseObligationBalanceSheetAmount", "PurchaseObligation",
+    "ContractualObligation", "GuaranteeObligationsMaximumExposure",
+}
+
+
+CONCENTRATION_BENCHMARKS = [(re.compile(r"Receivable"), "accounts receivable"), (re.compile(r"Revenue|Sales"), "revenue"),
+                            (re.compile(r"Purchase|Supplier|Cost"), "purchases")]
+
+
+def concentration_label(dims: list[tuple[str, str]]) -> str:
+    """'Customer A (share of revenue)' from the subject (customer, region) and the benchmark axes."""
+    by_axis = {axis.split(":", 1)[-1]: member for axis, member in dims}
+    subject = by_axis.get("MajorCustomersAxis") or by_axis.get("StatementGeographicalAxis") or by_axis.get("EquitySecuritiesByIndustryAxis")
+    benchmark_member = by_axis.get("ConcentrationRiskByBenchmarkAxis", "")
+    benchmark = next((name for pattern, name in CONCENTRATION_BENCHMARKS if pattern.search(benchmark_member)), None)
+    label = humanize(subject) if subject else "Concentration"
+    return f"{label} (share of {benchmark})" if benchmark else label
+
+
+def concept_label(concept: str) -> str:
+    name = concept.split(":", 1)[-1]
+    return CONCEPT_LABELS.get(name) or humanize(name)

@@ -270,6 +270,7 @@ def research_conn(pg_url, monkeypatch):
 
     monkeypatch.setenv("DATABASE_URL", pg_url)
     conn = db.connect(pg_url)
-    conn.execute("TRUNCATE companies, filings, filing_sections, facts, fact_sources, analysis_runs RESTART IDENTITY CASCADE")
+    conn.execute("TRUNCATE companies, filings, filing_sections, facts, fact_sources, analysis_runs, member_aliases, "
+                 "research_snapshots RESTART IDENTITY CASCADE")
     yield conn
     conn.close()

@@ -193,9 +193,9 @@ def _save_facts(conn: psycopg.Connection, company_id: int, filing_id: int, facts
             reported_label, xbrl_concept, dimensions, dimensions_hash, value_reported, reported_scale, reported_unit,
             reported_currency, value_normalized, normalized_unit, currency, decimals, accounting_standard, text_value,
             period_type, period_start, period_end, fiscal_year, fiscal_period, period_months, is_comparative,
-            extraction_method, parser_confidence, confidence_level, pipeline_version)
+            extraction_method, parser_confidence, confidence_level, pipeline_version, triggers)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-            %s, %s, %s, %s, %s, %s, %s, %s)
+            %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING fact_id
         """,
         [
@@ -204,7 +204,7 @@ def _save_facts(conn: psycopg.Connection, company_id: int, filing_id: int, facts
              f.reported_unit, f.reported_currency, f.value_normalized, f.normalized_unit, f.currency, f.decimals,
              f.accounting_standard, f.text_value, f.period_type, f.period_start, f.period_end, f.fiscal_year,
              f.fiscal_period, f.period_months, f.is_comparative, f.extraction_method, f.parser_confidence,
-             f.confidence_level, version)
+             f.confidence_level, version, f.triggers or None)
             for f in facts
         ],
     )
@@ -268,11 +268,17 @@ HEADLINE_METRICS = ("revenue", "gross_profit", "operating_income", "net_income",
                     "capex", "cash", "total_assets", "long_term_debt")
 
 
-def find_company(conn: psycopg.Connection, ticker: str | None = None, cik: int | None = None) -> dict | None:
-    column, key = ("cik", cik) if cik is not None else ("ticker", (ticker or "").strip().upper().replace(".", "-"))
+def find_company(conn: psycopg.Connection, ticker: str | None = None, cik: int | None = None,
+                 company_id: int | None = None) -> dict | None:
+    if company_id is not None:
+        column, key = "company_id", company_id
+    elif cik is not None:
+        column, key = "cik", cik
+    else:
+        column, key = "ticker", (ticker or "").strip().upper().replace(".", "-")
     with conn.cursor(row_factory=dict_row) as cur:
         return cur.execute(
-            "SELECT company_id, cik, ticker, name, reporting_currency, accounting_standard, fiscal_year_end "
+            "SELECT company_id, cik, ticker, name, reporting_currency, accounting_standard, fiscal_year_end, is_showcase "
             f"FROM companies WHERE {column} = %s",
             (key,),
         ).fetchone()
@@ -308,3 +314,203 @@ def current_metrics(conn: psycopg.Connection, filing_id: int) -> list[dict]:
         ).fetchall()
     # NUMERIC arrives as Decimal; the API speaks floats.
     return [{**row, "value": float(row["value"]) if row["value"] is not None else None} for row in rows]
+
+
+# --- renamed categories ---
+
+def bridge_aliases(conn: psycopg.Connection, company_id: int) -> list[tuple[str, str]]:
+    """Links renamed categories through comparative periods.
+
+    A filing repeats last period's values; when one of them sits under a key the older filing never used, and the
+    older filing reported exactly that value for that period under a key this filing never uses, the old key was
+    renamed. NVIDIA's Q2 FY27 10-Q reports April's $119B supply commitments under a new member name. Only one-to-one
+    matches are kept, so two equal amounts can never be crossed."""
+    rows = conn.execute(
+        """
+        SELECT DISTINCT n.fact_key, o.fact_key, n.period_end, n.value_normalized, fn.accession_number, fo.accession_number
+        FROM facts n
+        JOIN filings fn ON fn.filing_id = n.filing_id
+        JOIN facts o ON o.company_id = n.company_id AND o.category = n.category AND o.fact_key <> n.fact_key
+            AND o.period_end = n.period_end AND o.period_start IS NOT DISTINCT FROM n.period_start
+            AND o.value_normalized = n.value_normalized AND o.currency IS NOT DISTINCT FROM n.currency
+            AND NOT o.is_comparative
+        JOIN filings fo ON fo.filing_id = o.filing_id AND fo.filing_date < fn.filing_date
+        WHERE n.company_id = %s AND n.is_comparative AND n.canonical_metric IS NULL AND n.value_normalized <> 0
+          AND NOT EXISTS (SELECT 1 FROM facts x WHERE x.filing_id = o.filing_id AND x.fact_key = n.fact_key)
+          AND NOT EXISTS (SELECT 1 FROM facts y WHERE y.filing_id = n.filing_id AND y.fact_key = o.fact_key)
+        """,
+        (company_id,),
+    ).fetchall()
+    olds_for_new: dict[str, set[str]] = {}
+    news_for_old: dict[str, set[str]] = {}
+    evidence: dict[tuple[str, str], dict] = {}
+    for new_key, old_key, period_end, value, new_acc, old_acc in rows:
+        olds_for_new.setdefault(new_key, set()).add(old_key)
+        news_for_old.setdefault(old_key, set()).add(new_key)
+        evidence.setdefault((old_key, new_key), {
+            "period_end": period_end.isoformat(), "value": float(value), "new_filing": new_acc, "old_filing": old_acc,
+        })
+    pairs = [
+        (old_key, new_key, "comparative_period", evidence[(old_key, new_key)]) for (old_key, new_key) in evidence
+        if olds_for_new[new_key] == {old_key} and news_for_old[old_key] == {new_key}
+    ]
+    bridged = {old for old, *_ in pairs} | {new for _, new, *_ in pairs}
+    pairs += [p for p in _renamed_by_dropped_words(conn, company_id) if p[0] not in bridged and p[1] not in bridged]
+    with conn.transaction():
+        conn.execute("DELETE FROM member_aliases WHERE company_id = %s AND method IN ('comparative_period', 'dropped_words')",
+                     (company_id,))
+        if pairs:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    "INSERT INTO member_aliases (company_id, old_key, new_key, method, evidence) "
+                    "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (company_id, old_key) DO NOTHING",
+                    [(company_id, old, new, method, Jsonb(ev)) for old, new, method, ev in pairs],
+                )
+    return [(old, new) for old, new, *_ in pairs]
+
+
+def _words(key: str) -> set[str]:
+    return set(key.rsplit(".", 1)[-1].split("_")) - {"member", "and", "of", "the"}
+
+
+# Words every category in a family shares; a rename must also share a word that says what the category is.
+GENERIC_WORDS = {"other", "total", "future", "commitment", "commitments", "obligation", "obligations", "agreement",
+                 "agreements", "net", "amount", "amounts", "additional", "purchase", "purchases", "and"}
+RENAME_VALUE_RATIO = (0.2, 5.0)
+
+
+def _renamed_by_dropped_words(conn: psycopg.Connection, company_id: int) -> list[tuple[str, str, str, dict]]:
+    """Renames with no comparative value to match: a category that stops in one filing while one first appears in the
+    next, under the same concept, whose name is the old name with qualifiers dropped or added ("Multi year cloud
+    service agreement commitments" -> "Cloud service agreement commitments"). One-to-one only."""
+    rows = conn.execute(
+        """
+        WITH spans AS (
+            SELECT f.fact_key, f.category, f.xbrl_concept, min(fl.filing_date) AS first_filed, max(fl.filing_date) AS last_filed
+            FROM facts f JOIN filings fl USING (filing_id)
+            WHERE f.company_id = %s AND f.canonical_metric IS NULL AND f.fact_key LIKE '%%.%%.%%'
+            GROUP BY f.fact_key, f.category, f.xbrl_concept
+        ), sequence AS (
+            SELECT filing_date, lead(filing_date) OVER (ORDER BY filing_date) AS next_date
+            FROM (SELECT DISTINCT filing_date FROM filings WHERE company_id = %s AND NOT is_amendment) d
+        )
+        SELECT o.fact_key, n.fact_key, o.last_filed, n.first_filed
+        FROM spans o
+        JOIN sequence q ON q.filing_date = o.last_filed
+        JOIN spans n ON n.category = o.category AND n.xbrl_concept = o.xbrl_concept AND n.first_filed = q.next_date
+        """,
+        (company_id, company_id),
+    ).fetchall()
+    keys = list({k for row in rows for k in row[:2]})
+    values: dict[str, list[tuple]] = {}
+    for key, period_end, value in conn.execute(
+        "SELECT fact_key, period_end, value_normalized::float8 FROM facts WHERE company_id = %s AND fact_key = ANY(%s) "
+        "AND NOT is_comparative ORDER BY period_end", (company_id, keys),
+    ).fetchall():
+        values.setdefault(key, []).append((period_end, value))
+    candidates = []
+    for old_key, new_key, last_filed, first_filed in rows:
+        if old_key.rsplit(".", 1)[0] != new_key.rsplit(".", 1)[0]:
+            continue  # other dimensions differ, not just the category name
+        old_words, new_words = _words(old_key), _words(new_key)
+        shared = old_words & new_words
+        if shared not in (old_words, new_words) or old_words == new_words or not shared - GENERIC_WORDS:
+            continue
+        old_value, new_value = values.get(old_key, [(None, None)])[-1][1], values.get(new_key, [(None, None)])[0][1]
+        if not old_value or not new_value or not RENAME_VALUE_RATIO[0] <= new_value / old_value <= RENAME_VALUE_RATIO[1]:
+            continue  # a name that fits but an amount that does not is a different line
+        candidates.append((old_key, new_key, {
+            "rule": "same concept; name differs only by added or dropped words",
+            "old_last_filed": last_filed.isoformat(), "new_first_filed": first_filed.isoformat(),
+            "old_value": old_value, "new_value": new_value,
+        }))
+    olds = [c[0] for c in candidates]
+    news = [c[1] for c in candidates]
+    return [
+        (old, new, "dropped_words", evidence)
+        for old, new, evidence in candidates if olds.count(old) == 1 and news.count(new) == 1
+    ]
+
+
+def aliases(conn: psycopg.Connection, company_id: int) -> dict[str, str]:
+    """old key -> newest key, following chains of renames."""
+    links = dict(conn.execute("SELECT old_key, new_key FROM member_aliases WHERE company_id = %s", (company_id,)).fetchall())
+    resolved = {}
+    for old in links:
+        key, seen = old, {old}
+        while key in links and links[key] not in seen:
+            key = links[key]
+            seen.add(key)
+        resolved[old] = key
+    return resolved
+
+
+# --- snapshots ---
+
+def company_facts(conn: psycopg.Connection, company_id: int) -> list[dict]:
+    """Every stored fact for a company with its filing and first source, for building the snapshot."""
+    with conn.cursor(row_factory=dict_row) as cur:
+        return cur.execute(
+            """
+            SELECT f.fact_id, f.fact_key, f.fact_type, f.category, f.subcategory, f.canonical_metric, f.label,
+                f.reported_label, f.xbrl_concept, f.dimensions, f.value_normalized::float8 AS value, f.normalized_unit,
+                f.currency, f.period_type, f.period_start, f.period_end, f.fiscal_year, f.fiscal_period,
+                f.period_months, f.is_comparative, f.confidence_level, f.triggers,
+                fl.filing_id, fl.accession_number, fl.form_type, fl.filing_date, fl.is_annual, fl.source_url,
+                s.source_text, s.document_url, s.xbrl_element_id, s.heading
+            FROM facts f
+            JOIN filings fl USING (filing_id)
+            LEFT JOIN LATERAL (
+                SELECT source_text, document_url, xbrl_element_id, heading FROM fact_sources
+                WHERE fact_id = f.fact_id ORDER BY source_id LIMIT 1
+            ) s ON true
+            WHERE f.company_id = %s AND f.value_normalized IS NOT NULL
+            """,
+            (company_id,),
+        ).fetchall()
+
+
+def load_snapshot(conn: psycopg.Connection, company_id: int) -> dict | None:
+    with conn.cursor(row_factory=dict_row) as cur:
+        return cur.execute(
+            "SELECT snapshot_version, parser_version, payload, built_at, checked_at FROM research_snapshots WHERE company_id = %s",
+            (company_id,),
+        ).fetchone()
+
+
+def save_snapshot(conn: psycopg.Connection, company_id: int, as_of_filing_id: int | None, snapshot_version: int,
+                  parser_version: int, payload: dict) -> None:
+    conn.execute(
+        """
+        INSERT INTO research_snapshots (company_id, as_of_filing_id, snapshot_version, parser_version, payload)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (company_id) DO UPDATE SET as_of_filing_id = EXCLUDED.as_of_filing_id,
+            snapshot_version = EXCLUDED.snapshot_version, parser_version = EXCLUDED.parser_version,
+            payload = EXCLUDED.payload, built_at = now(), checked_at = now()
+        """,
+        (company_id, as_of_filing_id, snapshot_version, parser_version, Jsonb(payload)),
+    )
+
+
+def mark_checked(conn: psycopg.Connection, company_id: int) -> None:
+    conn.execute("UPDATE research_snapshots SET checked_at = now() WHERE company_id = %s", (company_id,))
+
+
+def touch_company(conn: psycopg.Connection, company_id: int) -> None:
+    conn.execute("UPDATE companies SET last_viewed_at = now() WHERE company_id = %s", (company_id,))
+
+
+def evict_companies(conn: psycopg.Connection, keep: int) -> int:
+    """Deletes the least recently viewed non-showcase companies beyond `keep` (cascading to their filings and facts).
+
+    Counting companies bounds the stored data; Postgres reuses the freed space, whereas the database file size
+    would not shrink after a delete and so cannot drive eviction."""
+    return conn.execute(
+        """
+        DELETE FROM companies WHERE company_id IN (
+            SELECT company_id FROM companies WHERE NOT is_showcase
+            ORDER BY last_viewed_at DESC NULLS LAST, updated_at DESC
+            OFFSET %s)
+        """,
+        (keep,),
+    ).rowcount
