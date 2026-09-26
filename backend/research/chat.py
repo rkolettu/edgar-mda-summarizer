@@ -55,6 +55,15 @@ class InvalidQuestion(ValueError):
     pass
 
 
+# Models add markdown emphasis despite the prompt, and write "$25.0 B", which the figure check reads as $25.0.
+EMPHASIS = re.compile(r"\*\*|__")
+SPACED_UNIT = re.compile(r"(\$\d[\d,]*(?:\.\d+)?) ([KMBT])\b")
+
+
+def tidy(text: str) -> str:
+    return SPACED_UNIT.sub(r"\1\2", EMPHASIS.sub("", text)).strip()
+
+
 @dataclass
 class Chunk:
     id: str
@@ -189,12 +198,13 @@ def answer(conn: psycopg.Connection, company_id: int, question: str, history: li
     context = "\n\n".join(parts)
 
     result = llm.reply(SYSTEM, context)
+    text = tidy(result.text)
     index = FigureIndex()
     index.add_text(context)
-    cited = set(re.findall(r"\[(S\d+)\]", result.text))
+    cited = set(re.findall(r"\[(S\d+)\]", text))
     return {
-        "answer": result.text,
-        "figures": check_figures(result.text, index),
+        "answer": text,
+        "figures": check_figures(text, index),
         "sources": [{"id": p.id, "label": p.label, "text": p.text, "document_url": p.document_url}
                     for p in passages if p.id in cited],
         "model": result.model,
