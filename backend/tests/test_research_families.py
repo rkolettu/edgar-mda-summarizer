@@ -146,3 +146,22 @@ def test_convenience_translations_yield_to_the_reporting_currency():
     facts = [f for f in extract.extract(ixbrl.parse_documents([("f.htm", doc.encode())]), "20-F").facts if f.category == "debt"]
     assert sorted((f.fact_key, f.currency, f.value_normalized) for f in facts) == [
         ("debt.bonds_issued.euro_notes", "EUR", 1_000e6), ("debt.longterm_borrowings", "TWD", 39_830e6)]
+
+
+def test_bank_credit_exposure_keeps_totals_and_single_breakdowns_only():
+    exposure = "ifrs-full:ExposureToCreditRiskOnLoanCommitmentsAndFinancialGuaranteeContracts"
+    portfolio = ("acme:PortfolioAxis", "acme:MortgagesMember")
+    grade = ("acme:InternalCreditGradesAxis", "acme:Grade0To1Member")
+    facts = families(
+        row("Total exposure", value(exposure, "end", "267.8", scale=9))
+        + row("Mortgages", value(exposure, "mort", "13.0", scale=9))
+        + row("Mortgages, grade 0 to 1", value(exposure, "mortgrade", "4.1", scale=9))
+        + row("Grade 0 to 1", value(exposure, "grade", "44.3", scale=9))
+        + row("Share of associates, additions", value("acme:AdditionsOfInvestmentsInAssociatesAndJointVentures", "q", "55")),
+        [dims_context("mort", portfolio), dims_context("mortgrade", portfolio, grade), dims_context("grade", grade)],
+    )
+    assert sorted(facts) == [
+        "credit_exposure.exposure_to_credit_risk_on_loan_commitments_and_financial_guarantee_contracts",
+        "credit_exposure.exposure_to_credit_risk_on_loan_commitments_and_financial_guarantee_contracts.mortgages",
+    ]
+    assert facts["credit_exposure.exposure_to_credit_risk_on_loan_commitments_and_financial_guarantee_contracts"].category == "credit_exposure"

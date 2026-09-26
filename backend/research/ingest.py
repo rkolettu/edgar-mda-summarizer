@@ -36,24 +36,58 @@ def read_watchlist(path: Path = WATCHLIST) -> list[str]:
     return [line for line in lines if line]
 
 
+def _rows(block: dict) -> list[dict]:
+    forms = block.get("form", [])
+    inline = block.get("isInlineXBRL") or [0] * len(forms)
+    return [
+        {
+            "form": form,
+            "accession_number": block["accessionNumber"][i],
+            "primary_doc": block["primaryDocument"][i],
+            "filing_date": block["filingDate"][i],
+            "report_date": block["reportDate"][i],
+            "inline_xbrl": bool(inline[i]),
+        }
+        for i, form in enumerate(forms)
+    ]
+
+
+def with_history(submissions: dict, annual: int = DEFAULT_ANNUAL) -> dict:
+    """Adds SEC's older filing pages until `annual` annual reports are listed: a bank's note offerings (424B2) can
+    push its annual reports off the thousand filings of the recent list."""
+    filings = submissions.get("filings", {})
+    rows = _rows(filings.get("recent", {}))
+    for page in filings.get("files", []):
+        if sum(r["form"] in extract.ANNUAL_FORMS for r in rows) >= annual:
+            break
+        rows += _rows(sec.sec_get(SUBMISSIONS_PAGE.format(name=page["name"])).json())
+    return {**submissions, "rows": rows}
+
+
+SUBMISSIONS_PAGE = "https://data.sec.gov/submissions/{name}"
+TAGGED_FORMS = {"6-K", "6-K/A"}   # discovered only when they carry inline XBRL
+COMPANION_DAYS = 10               # a 6-K furnished this close to an annual report of the same period is part of it
+
+
 def discover(submissions: dict, annual: int = DEFAULT_ANNUAL, interim_years: int = INTERIM_YEARS) -> list[dict]:
     """The latest `annual` annual filings, amendments to them, and interim filings from the last `interim_years`
     fiscal years, oldest first.
 
+    Interim reports are 10-Qs, or 6-Ks that carry inline XBRL (a foreign issuer's tagged quarterly or half-year
+    report). A tagged 6-K furnished with an annual report for the same period holds that report's financial
+    statements (Canadian National's 40-F incorporates them from a 6-K) and is attached to it as a companion.
     Oldest first means originals are stored before their amendments and the company profile ends on the latest filing.
     """
-    recent = submissions.get("filings", {}).get("recent", {})
-    filings = [
-        {
-            "form": form,
-            "accession_number": recent["accessionNumber"][i],
-            "primary_doc": recent["primaryDocument"][i],
-            "filing_date": recent["filingDate"][i],
-            "report_date": recent["reportDate"][i],
-        }
-        for i, form in enumerate(recent.get("form", []))
-        if form in adapters.SUPPORTED_FORMS
-    ]
+    rows = submissions.get("rows") or _rows(submissions.get("filings", {}).get("recent", {}))
+    filings = [f for f in rows if f["form"] in adapters.SUPPORTED_FORMS and (f["form"] not in TAGGED_FORMS or f["inline_xbrl"])]
+    companions: dict[str, list[dict]] = {}
+    for report in (f for f in filings if extract.base_form(f["form"]) in extract.ANNUAL_FORMS):
+        for f in filings:
+            if f["form"] in TAGGED_FORMS and f["report_date"] == report["report_date"] and \
+                    abs((date.fromisoformat(f["filing_date"]) - date.fromisoformat(report["filing_date"])).days) <= COMPANION_DAYS:
+                companions.setdefault(report["accession_number"], []).append(f)
+    attached = {f["accession_number"] for group in companions.values() for f in group}
+    filings = [{**f, "companions": companions.get(f["accession_number"], [])} for f in filings if f["accession_number"] not in attached]
     annuals = [f for f in filings if f["form"] in extract.ANNUAL_FORMS][:annual]
     if annuals:
         oldest = annuals[-1]["report_date"]
@@ -87,7 +121,8 @@ def ingest_filing(conn, company_id: int, cik: int, filing: dict, force: bool = F
     adapter = adapters.adapter_for(filing["form"])
     if adapter is None:
         return {**summary, "status": "unsupported"}
-    if not force and store.parsed_version(conn, accession) == extract.PARSER_VERSION:
+    if not force and (store.parsed_version(conn, accession) == extract.PARSER_VERSION
+                      or store.stage_skipped(conn, accession, "parse", extract.PARSER_VERSION)):
         return {**summary, "status": "current"}
     run_id = store.claim_stage(conn, accession, "parse", extract.PARSER_VERSION, force=force)
     if run_id is None:
@@ -95,19 +130,29 @@ def ingest_filing(conn, company_id: int, cik: int, filing: dict, force: bool = F
 
     try:
         documents = adapters.list_documents(cik, filing)
+        companions = {c["accession_number"]: adapters.list_documents(cik, c, role="companion") for c in filing.get("companions", [])}
         primary = next(d for d in documents if d.role == "primary")
         responses = {primary.url: sec.sec_get(primary.url)}
-        tagged = []
-        for doc in documents:
-            if not doc.ixbrl:
-                continue
-            response = responses.get(doc.url) or sec.sec_get(doc.url)
-            responses[doc.url] = response
-            if ixbrl.is_ixbrl(_content(response)):
-                tagged.append((doc.url, _content(response)))
-        parsed = ixbrl.parse_documents(tagged)
 
-        narrative, narrative_warnings = adapter.narrative(cik, filing, responses[primary.url].text)
+        def tagged(docs: list[adapters.DocRef]) -> list[tuple[str, bytes]]:
+            out = []
+            for doc in docs:
+                if not doc.ixbrl:
+                    continue
+                response = responses.get(doc.url) or sec.sec_get(doc.url)
+                responses[doc.url] = response
+                if ixbrl.is_ixbrl(_content(response)):
+                    out.append((doc.url, _content(response)))
+            return out
+
+        own = tagged(documents)
+        parsed = ixbrl.parse_documents(own)
+        for accession_number, docs in companions.items():
+            if found := tagged(docs):
+                parsed = ixbrl.merge(parsed, ixbrl.parse_documents(found), prefix=accession_number)
+        all_documents = documents + [d for docs in companions.values() for d in docs]
+        files = adapters.Files(all_documents, responses)
+        narrative, narrative_warnings = adapter.narrative(cik, filing, responses[primary.url].text, files)
         is_amendment = filing["form"].endswith("/A")
         # Amendments are often partial (a 10-K/A may be only Part III), so nothing is expected of them.
         expected = () if is_amendment else adapter.expected
@@ -115,10 +160,14 @@ def ingest_filing(conn, company_id: int, cik: int, filing: dict, force: bool = F
         extraction = extract.extract(
             parsed, filing["form"], expected, report_date, [n.as_section(i) for i, n in enumerate(narrative)]
         )
-        if not tagged:
+        if not parsed.facts:
             extraction.warnings.insert(0, "No inline XBRL found; facts are unavailable for this filing.")
         extraction.warnings.extend(narrative_warnings)
-        filing_id = store.save_filing(conn, company_id, filing, primary.url, documents, extraction, extract.PARSER_VERSION)
+        if filing["form"] in TAGGED_FORMS and not extraction.coverage["financial_statements"]["found"]:
+            # A 6-K whose tags are only its cover page is not an interim report; remember it so it is not re-read.
+            store.finish_stage(conn, run_id, "succeeded")
+            return {**summary, "status": "skipped"}
+        filing_id = store.save_filing(conn, company_id, filing, primary.url, all_documents, extraction, extract.PARSER_VERSION)
     except Exception as exc:
         store.finish_stage(conn, run_id, "failed", error=_error(exc))
         log.warning("Failed to ingest %s: %s", accession, _error(exc))
@@ -145,14 +194,14 @@ def ingest_company(conn, query: str, *, annual: int = DEFAULT_ANNUAL, force: boo
     company = sec.resolve_company(query)
     cik = company["cik"]
     submissions = sec.get_submissions(cik)
-    filings = discover(submissions, annual)
+    filings = discover(with_history(submissions, annual), annual)
     filer_cik = cik
     if not filings:
         # A newly reorganized holding company files under its predecessor until its first annual report.
         predecessor = sec.find_predecessor_cik(submissions)
         if predecessor:
             filer_cik, submissions = predecessor, sec.get_submissions(predecessor)
-            filings = discover(submissions, annual)
+            filings = discover(with_history(submissions, annual), annual)
 
     company_id = store.upsert_company(conn, cik, company["ticker"], submissions.get("name") or company["name"], showcase)
     results = []

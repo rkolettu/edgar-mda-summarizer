@@ -71,6 +71,15 @@ def parsed_version(conn: psycopg.Connection, accession: str) -> int | None:
     return row[0] if row else None
 
 
+def stage_skipped(conn: psycopg.Connection, accession: str, stage: str, version: int) -> bool:
+    """A stage that succeeded without storing a filing (a 6-K whose tags are only its cover page)."""
+    return conn.execute(
+        "SELECT 1 FROM analysis_runs WHERE accession_number = %s AND stage = %s AND pipeline_version = %s "
+        "AND status = 'succeeded' AND filing_id IS NULL",
+        (accession, stage, version),
+    ).fetchone() is not None
+
+
 def claim_stage(conn: psycopg.Connection, accession: str, stage: str, version: int, force: bool = False) -> int | None:
     """Starts a stage unless another worker is running it or it already succeeded at this version (unless forced)."""
     with conn.transaction():
@@ -289,7 +298,7 @@ def company_filings(conn: psycopg.Connection, company_id: int) -> list[dict]:
         return cur.execute(
             """
             SELECT f.filing_id, f.accession_number, f.form_type, f.filing_date, f.period_start, f.period_end,
-                f.fiscal_year, f.fiscal_period, f.is_annual, f.accounting_standard, f.reporting_currency,
+                f.fiscal_year, f.fiscal_period, f.period_months, f.is_annual, f.accounting_standard, f.reporting_currency,
                 f.parser_confidence, f.confidence_level, f.coverage, f.warnings, f.source_url,
                 (SELECT count(*) FROM facts WHERE filing_id = f.filing_id) AS fact_count
             FROM filings f WHERE f.company_id = %s

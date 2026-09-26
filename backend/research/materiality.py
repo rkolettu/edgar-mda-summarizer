@@ -29,7 +29,7 @@ STRATEGIC = {
     "guarantee": 0.9, "acquisitions": 0.9, "subsequent_events": 0.9, "commitment": 0.7, "customer_concentration": 0.7,
     "contingencies": 0.6, "debt": 0.6, "investment": 0.6, "unusual_item": 0.6, "risk_factors": 0.5, "segment": 0.5,
     "geography": 0.5, "product": 0.4, "backlog": 0.5, "management_discussion": 0.4, "capital_return": 0.4,
-    "non_operating": 0.5, "tax": 0.3, "financial_metric": 0.6, "derived_metric": 0.6,
+    "non_operating": 0.5, "tax": 0.3, "financial_metric": 0.6, "derived_metric": 0.6, "credit_exposure": 0.3,
 }
 BONUSES = {
     "subsequent_event": 0.10, "new_guarantee": 0.10, "new_financing": 0.10, "hypothetical_to_realized": 0.10,
@@ -45,9 +45,14 @@ class Anchors:
     revenue: float | None = None
     operating_income: float | None = None
     total_assets: float | None = None
+    # A bank's balances (loans, deposits, loan commitments) are its business and dwarf its revenue, so they are sized
+    # against total assets alone, by how much they moved.
+    bank: bool = False
 
-    def shares(self, amount: float) -> dict[str, float]:
+    def shares(self, amount: float, balance: bool = False) -> dict[str, float]:
         out = {}
+        if self.bank and balance:
+            return {"total_assets": abs(amount) / abs(self.total_assets)} if self.total_assets else {}
         if self.revenue:
             out["revenue"] = abs(amount) / abs(self.revenue)
         if self.operating_income is not None and self.revenue:
@@ -72,6 +77,7 @@ class Candidate:
     # Balances like commitments matter by their level; income statement lines by how much they moved, or every large
     # line of a large company would rank as material every quarter.
     magnitude_basis: str = "level"                 # level | delta
+    balance: bool = False                          # an amount at a date (commitments, loans), not over a period
 
 
 @dataclass
@@ -101,9 +107,10 @@ def score(candidate: Candidate, anchors: Anchors) -> Score:
     magnitude = 0.0
     if candidate.unit == "currency" and candidate.amount is not None:
         basis = candidate.amount
-        if candidate.magnitude_basis == "delta" and candidate.base_amount is not None:
+        by_delta = candidate.magnitude_basis == "delta" or (anchors.bank and candidate.balance)
+        if by_delta and candidate.base_amount is not None:
             basis = candidate.amount - candidate.base_amount
-        shares = anchors.shares(basis) if anchors.currency == candidate.currency else {}
+        shares = anchors.shares(basis, candidate.balance) if anchors.currency == candidate.currency else {}
         if shares:
             anchor, share = max(shares.items(), key=lambda kv: kv[1] / THRESHOLDS[kv[0]])
             magnitude = _curve(share / THRESHOLDS[anchor])

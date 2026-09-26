@@ -48,6 +48,7 @@ function changeText(item) {
 function comparisonLabel(item) {
   if (item.comparison === 'year_over_year') return 'vs. a year earlier'
   if (item.base_filing) return `vs. ${item.base_filing.fiscal_label ?? ''} ${item.base_filing.form}`.replace('  ', ' ')
+  if (item.base_period_label) return `vs. ${item.base_period_label}`
   return ''
 }
 

@@ -247,7 +247,8 @@ def html_to_text(html: str) -> str:
     if keep_lines:
         html = BLOCK_TAG.sub("\\1\n", html)
     soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "head"]):
+    # ix:header holds an inline XBRL filing's hidden contexts and cover facts, not its text.
+    for tag in soup(["script", "style", "head", "ix:header"]):
         tag.decompose()
     text = soup.get_text(separator=" ")
     # Zero-width spaces are invisible in the filing but split words and headings for the regexes below.
@@ -522,9 +523,10 @@ def extract_annual_report_review(text: str) -> str | None:
     return None
 
 
-def load_20f(cik: int, filing: dict, html: str | None = None) -> dict:
+def load_20f(cik: int, filing: dict, html: str | None = None, text: str | None = None) -> dict:
     document_url = archive_url(cik, filing["accession_number"], filing["primary_doc"])
-    text = html_to_text(html if html is not None else sec_get(document_url).text)
+    if text is None:
+        text = html_to_text(html if html is not None else sec_get(document_url).text)
     mdna_url = document_url
     operating = extract_section(text, UBS_OPERATING_START, UBS_OPERATING_END)
     source = "operating_review"

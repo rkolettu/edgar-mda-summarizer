@@ -21,14 +21,18 @@ class Metric:
     ifrs: tuple[str, ...] = ()
     # Set where the IFRS concept is not strictly the US GAAP one, so comparisons across standards can say so.
     ifrs_note: str | None = None
+    # Company-specific concept names that mean this metric although they extend a standard name
+    # ("ProfitLossBeforeTaxAndEquityInNetIncomeOfInvestmentInAssociates"); used only when one concept matches.
+    extension: re.Pattern | None = None
 
     @property
     def fact_key(self) -> str:
         return f"metric.{self.key}"
 
 
-def _m(key, label, statement, period_type, unit, us_gaap, ifrs=(), ifrs_note=None) -> Metric:
-    return Metric(key, label, statement, period_type, unit, tuple(us_gaap), tuple(ifrs), ifrs_note)
+def _m(key, label, statement, period_type, unit, us_gaap, ifrs=(), ifrs_note=None, extension=None) -> Metric:
+    return Metric(key, label, statement, period_type, unit, tuple(us_gaap), tuple(ifrs), ifrs_note,
+                  re.compile(extension) if extension else None)
 
 
 D, I = "duration", "instant"
@@ -38,7 +42,8 @@ METRICS: list[Metric] = [
     _m("revenue", "Revenue", IS, D, "currency",
        ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "RevenueFromContractWithCustomerIncludingAssessedTax",
         "SalesRevenueNet", "RevenuesNetOfInterestExpense"],
-       ["Revenue", "RevenueFromContractsWithCustomers"]),
+       # Banks report total operating income ("Total revenues") as RevenueAndOperatingIncome.
+       ["Revenue", "RevenueFromContractsWithCustomers", "RevenueAndOperatingIncome"]),
     _m("cost_of_revenue", "Cost of revenue", IS, D, "currency",
        ["CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold"], ["CostOfSales"]),
     _m("gross_profit", "Gross profit", IS, D, "currency", ["GrossProfit"], ["GrossProfit"]),
@@ -56,22 +61,27 @@ METRICS: list[Metric] = [
     _m("pretax_income", "Income before income taxes", IS, D, "currency",
        ["IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
         "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"],
-       ["ProfitLossBeforeTax"]),
+       ["ProfitLossBeforeTax"],
+       extension=r"^(?:ProfitLoss|Income|Earnings)(?:FromContinuingOperations)?BeforeIncomeTax|^ProfitLossBeforeTaxAnd"),
     _m("income_tax", "Income tax expense (benefit)", IS, D, "currency", ["IncomeTaxExpenseBenefit"], ["IncomeTaxExpenseContinuingOperations"]),
     # Attributable to the parent first; ProfitLoss includes noncontrolling interests and is only a fallback.
     _m("net_income", "Net income", IS, D, "currency",
        ["NetIncomeLoss", "NetIncomeLossAvailableToCommonStockholdersBasic", "ProfitLoss"],
-       ["ProfitLossAttributableToOwnersOfParent", "ProfitLoss"]),
+       ["ProfitLossAttributableToOwnersOfParent", "ProfitLossAttributableToOrdinaryEquityHoldersOfParentEntity", "ProfitLoss"]),
     _m("eps_diluted", "Diluted EPS", PS, D, "currency_per_share",
-       ["EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"], ["DilutedEarningsLossPerShare", "BasicAndDilutedEarningsLossPerShare"]),
+       ["EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted", "IncomeLossFromContinuingOperationsPerDilutedShare"],
+       ["DilutedEarningsLossPerShare", "BasicAndDilutedEarningsLossPerShare", "DilutedEarningsLossPerShareFromContinuingOperations"]),
     _m("eps_basic", "Basic EPS", PS, D, "currency_per_share",
-       ["EarningsPerShareBasic", "EarningsPerShareBasicAndDiluted"], ["BasicEarningsLossPerShare", "BasicAndDilutedEarningsLossPerShare"]),
+       ["EarningsPerShareBasic", "EarningsPerShareBasicAndDiluted", "IncomeLossFromContinuingOperationsPerBasicShare"],
+       ["BasicEarningsLossPerShare", "BasicAndDilutedEarningsLossPerShare", "BasicEarningsLossPerShareFromContinuingOperations"]),
     _m("operating_cash_flow", "Operating cash flow", CF, D, "currency",
        ["NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"],
-       ["CashFlowsFromUsedInOperatingActivities"]),
+       ["CashFlowsFromUsedInOperatingActivities", "CashFlowsFromUsedInOperations"]),
     _m("capex", "Capital expenditures", CF, D, "currency",
        ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets", "PaymentsForCapitalImprovements"],
-       ["PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities", "PurchaseOfPropertyPlantAndEquipment"]),
+       ["PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities", "PurchaseOfPropertyPlantAndEquipment",
+        "PurchaseOfPropertyPlantAndEquipmentIntangibleAssetsOtherThanGoodwillInvestmentPropertyAndOtherNoncurrentAssets",
+        "PurchaseOfOtherLongtermAssetsClassifiedAsInvestingActivities"]),
     _m("depreciation_amortization", "Depreciation and amortization", CF, D, "currency",
        ["DepreciationDepletionAndAmortization", "DepreciationAndAmortization", "DepreciationAmortizationAndAccretionNet"],
        ["DepreciationAndAmortisationExpense"]),
@@ -99,7 +109,8 @@ METRICS: list[Metric] = [
     _m("marketable_securities", "Marketable securities", BS, I, "currency",
        ["MarketableSecuritiesCurrent", "AvailableForSaleSecuritiesDebtSecuritiesCurrent", "ShortTermInvestments"]),
     _m("accounts_receivable", "Accounts receivable", BS, I, "currency",
-       ["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"], ["CurrentTradeReceivables", "TradeAndOtherCurrentReceivables"]),
+       ["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"],
+       ["CurrentTradeReceivables", "TradeAndOtherCurrentReceivables", "TradeAndOtherReceivables", "TradeReceivables"]),
     _m("inventory", "Inventory", BS, I, "currency", ["InventoryNet"], ["Inventories"]),
     _m("accounts_payable", "Accounts payable", BS, I, "currency",
        ["AccountsPayableCurrent"], ["CurrentTradePayables", "TradeAndOtherCurrentPayables"]),
@@ -124,7 +135,28 @@ METRICS: list[Metric] = [
     _m("commercial_paper", "Commercial paper", BS, I, "currency", ["CommercialPaper"]),
     _m("goodwill", "Goodwill", BS, I, "currency", ["Goodwill"], ["Goodwill"]),
     _m("shares_outstanding", "Shares outstanding", BS, I, "shares", ["CommonStockSharesOutstanding"]),
+    # Banks: what their statements lead with instead of gross profit, operating income and working capital.
+    _m("net_interest_income", "Net interest income", IS, D, "currency",
+       ["InterestIncomeExpenseNet", "InterestIncomeExpenseAfterProvisionForLoanLoss"], ["InterestRevenueExpense"]),
+    _m("fee_income", "Net fee and commission income", IS, D, "currency",
+       ["FeesAndCommissions", "NoninterestIncomeOtherOperatingIncome"], ["FeeAndCommissionIncomeExpense"]),
+    _m("noninterest_income", "Non-interest income", IS, D, "currency", ["NoninterestIncome"]),
+    _m("credit_loss_expense", "Credit loss expense", IS, D, "currency",
+       ["ProvisionForLoanLeaseAndOtherLosses", "ProvisionForLoanAndLeaseLosses", "ProvisionForCreditLosses",
+        "FinancingReceivableCreditLossExpenseReversal"],
+       ["ImpairmentLossImpairmentGainAndReversalOfImpairmentLossDeterminedInAccordanceWithIFRS9"]),
+    _m("operating_expenses", "Operating expenses", IS, D, "currency",
+       ["NoninterestExpense", "OperatingExpenses"], ["OperatingExpense", "ExpenseByNature"]),
+    _m("loans", "Loans", BS, I, "currency",
+       ["LoansAndLeasesReceivableNetReportedAmount", "LoansAndLeasesReceivableNetOfDeferredIncome",
+        "FinancingReceivableExcludingAccruedInterestAfterAllowanceForCreditLoss"],
+       ["LoansAndAdvancesToCustomers"]),
+    _m("deposits", "Deposits", BS, I, "currency", ["Deposits"], ["DepositsFromCustomers"],
+       extension=r"^Deposits(?:OtherThanTrading)?\d*$"),
 ]
+# Outflows are shown as positive amounts whatever sign the filer tags them with ("Net expenditures on property, plant
+# and equipment (6,676)" as a negative cash flow).
+OUTFLOW_METRICS = {"capex", "buybacks", "dividends_paid", "acquisitions", "debt_repaid", "credit_loss_expense", "operating_expenses"}
 
 METRICS_BY_KEY = {m.key: m for m in METRICS}
 
@@ -139,7 +171,17 @@ REPORTED_LABEL_METRICS = {
     "net income": "net_income", "cash and cash equivalents": "cash", "total assets": "total_assets",
     "inventories": "inventory", "inventory": "inventory", "accounts receivable, net": "accounts_receivable",
     "accounts payable": "accounts_payable", "total liabilities": "total_liabilities",
-    "capital expenditures": "capex", "purchases of property and equipment": "capex",
+    "capital expenditures": "capex", "purchases of property and equipment": "capex", "capital expenditure": "capex",
+    "net expenditures on property, plant and equipment": "capex", "cash capital expenditure": "capex",
+    "income before income taxes": "pretax_income", "income before taxes": "pretax_income", "profit before tax": "pretax_income",
+    "earnings before income taxes": "pretax_income", "income before tax and equity method investments": "pretax_income",
+    "net interest income": "net_interest_income", "non-interest income": "noninterest_income",
+    "noninterest income": "noninterest_income", "total non-interest income": "noninterest_income",
+    "non-interest expense": "operating_expenses", "noninterest expense": "operating_expenses",
+    "total non-interest expenses": "operating_expenses", "total non-interest expense": "operating_expenses",
+    "provision for credit losses": "credit_loss_expense", "credit loss expense": "credit_loss_expense",
+    "credit loss expense / (release)": "credit_loss_expense", "deposits": "deposits", "total deposits": "deposits",
+    "customer deposits": "deposits", "loans and advances to customers": "loans", "total loans": "loans",
 }
 
 
@@ -232,11 +274,13 @@ class Family:
     concepts: re.Pattern              # matched against the concept's local name
     axes: frozenset[str] | None       # allowed dimension axes (local names); None allows any, empty only totals
     exclude: re.Pattern | None = None
+    max_axes: int | None = None       # deeper cross-tabulations are left out
+    noise_axes: re.Pattern | None = None
 
 
-def _family(key, fact_type, concepts, axes=None, exclude=None) -> Family:
+def _family(key, fact_type, concepts, axes=None, exclude=None, max_axes=None, noise_axes=None) -> Family:
     return Family(key, fact_type, re.compile(concepts), None if axes is None else frozenset(axes),
-                  re.compile(exclude) if exclude else None)
+                  re.compile(exclude) if exclude else None, max_axes, re.compile(noise_axes) if noise_axes else None)
 
 
 SEGMENT_AXES = {"StatementBusinessSegmentsAxis", "SegmentsAxis"}
@@ -257,19 +301,32 @@ NOISE_CONCEPTS = re.compile(
     r"DueIn|Due(After|Within)|Remainder|Thereafter|Anniversary|Expiring|FutureMinimumPayments|NextTwelveMonths"
     r"|AfterYear|Year(One|Two|Three|Four|Five)|Accumulated|EvaluatedForImpairment|Reconciliation|Allowance"
     r"|InterestRate|Percentage(?!1$)|NumberOf|Weighted|Term$|Period$|Duration"
+    # Movements in a roll-forward (additions, disposals, exchange differences) restate the change in a balance; the
+    # assumptions of a sensitivity test are not amounts the company owes, holds or spent.
+    r"|^(?:IncreaseDecrease|Increase|Decrease)(?:Through|In)|^Reclassification|^Additions|^Disposals|^DividendsReceived"
+    r"|^ShareOfChangesIn|Sensitivity|ReasonablyPossible|Assumption|DiscountRate|GrowthRate"
 )
 SUBSEQUENT_EVENT_AXIS = "SubsequentEventTypeAxis"
 # Neutral members that do not change what a value measures.
 NEUTRAL_MEMBERS = {("ConsolidationItemsAxis", "OperatingSegmentsMember")}
 
+# A bank's credit risk tables break its exposure down by credit grade, impairment stage and portfolio at once.
+CREDIT_GRADE_AXES = r"Grade|Rating|Stage|ImpairmentOfFinancialInstruments|CreditImpair|ExpectedCreditLoss|Scope|Measurement"
+
 FAMILIES: list[Family] = [
+    # A bank's loan commitments and financial guarantee contracts under IFRS 9 are credit exposure, reported for
+    # expected credit losses; only totals and a single breakdown are followed.
+    _family("credit_exposure", "credit_exposure",
+            r"ExposureToCreditRisk|CreditRiskExposure|LoanCommitmentsAndFinancialGuaranteeContracts|MaximumExposureToLoss",
+            max_axes=1, noise_axes=CREDIT_GRADE_AXES),
     # "Guarantee deposits" (TSMC) are security deposits held or paid, not guarantees given.
-    _family("guarantee", "guarantee", r"Guarant|LettersOfCredit|CreditSupport", exclude=r"Collateral|Payables$|Fee|Deposit"),
+    _family("guarantee", "guarantee", r"Guarant|LettersOfCredit|CreditSupport", exclude=r"Collateral|Payables$|Fee|Deposit",
+            max_axes=2, noise_axes=CREDIT_GRADE_AXES),
     _family("commitment", "commitment",
             r"OtherCommitment$|PurchaseObligation|ContractualObligation$|PurchaseCommitment|UnrecordedUnconditional"
             r"|RecordedUnconditional|FundingCommitment|CommitmentsContractualAmount|LendingRelated(Financial)?Commitments"
             r"|UnfundedCommitment|CapitalCommitment|ContractualCommitment",
-            exclude=r"Allowance|Fee"),
+            exclude=r"Allowance|Fee", max_axes=2, noise_axes=CREDIT_GRADE_AXES),
     _family("debt", "debt",
             r"^LongTermDebt$|^LongTermDebtCurrent$|^LongTermDebtNoncurrent$|^CommercialPaper$|^ShortTermBorrowings$"
             r"|DebtInstrumentFaceAmount|DebtInstrumentCarryingAmount|LineOfCreditFacilityMaximumBorrowingCapacity"
@@ -308,7 +365,7 @@ BREAKDOWNS = [
 ]
 
 FAMILY_LABELS = {
-    "guarantee": "Guarantees", "commitment": "Commitments", "debt": "Debt", "investment": "Investments",
+    "credit_exposure": "Credit exposure", "guarantee": "Guarantees", "commitment": "Commitments", "debt": "Debt", "investment": "Investments",
     "capital_return": "Capital return", "non_operating": "Non-operating items", "unusual_item": "Unusual items",
     "customer_concentration": "Customer concentration", "backlog": "Remaining performance obligations",
     "tax": "Income taxes", "segment": "Segments", "geography": "Geography", "product": "Products and services",
@@ -324,6 +381,10 @@ def family_for(concept: str, axes: set[str]) -> Family | None:
         if not family.concepts.search(name) or (family.exclude and family.exclude.search(name)):
             continue
         if family.axes is not None and not axes <= family.axes:
+            return None
+        if family.max_axes is not None and len(axes) > family.max_axes:
+            return None
+        if family.noise_axes and any(family.noise_axes.search(axis) for axis in axes):
             return None
         return family
     return None

@@ -22,24 +22,44 @@ function Kpis({ financials }) {
   const fcf = cell(annual, 'free_cash_flow')
   const netCash = cell(quarterly, 'net_cash') ?? cell(annual, 'net_cash')
   const label = (c) => (c ? periodLabel(c.column.fiscal_year, c.column.fiscal_period) : '')
-  const tiles = [
-    revenue && { label: `Revenue · ${label(revenue)}`, value: money(revenue.value), sub: <Delta value={cell(annual, 'revenue_growth')?.value} /> },
+  const eps = cell(annual, 'eps_diluted') && { label: 'Diluted EPS', value: formatUnit(cell(annual, 'eps_diluted').value, 'currency_per_share', currency), sub: <Delta value={cell(annual, 'eps_growth')?.value} /> }
+  const revenueTiles = [
+    revenue && { label: `${financials.profile === 'bank' ? 'Total revenues' : 'Revenue'} · ${label(revenue)}`, value: money(revenue.value), sub: <Delta value={cell(annual, 'revenue_growth')?.value} /> },
     quarter && { label: `Revenue · ${label(quarter)}`, value: money(quarter.value), sub: <Delta value={cell(quarterly, 'revenue_growth')?.value} /> },
+  ]
+  // A bank is read by its efficiency and returns, not its gross margin or free cash flow.
+  const tiles = (financials.profile === 'bank' ? [
+    ...revenueTiles,
+    cell(annual, 'net_income') && {
+      label: `Net income · ${label(cell(annual, 'net_income'))}`, value: money(cell(annual, 'net_income').value),
+      sub: cell(annual, 'net_margin') ? `Net margin ${formatPct(cell(annual, 'net_margin').value)}` : null,
+    },
+    cell(annual, 'cost_income_ratio') && {
+      label: 'Cost/income ratio', value: formatPct(cell(annual, 'cost_income_ratio').value),
+      sub: cell(annual, 'credit_loss_expense') ? `Credit losses ${money(cell(annual, 'credit_loss_expense').value)}` : null,
+    },
+    cell(annual, 'roe') && { label: 'Return on equity', value: formatPct(cell(annual, 'roe').value), sub: label(cell(annual, 'roe')) },
+    eps,
+  ] : [
+    ...revenueTiles,
     cell(annual, 'operating_margin') && {
       label: 'Operating margin', value: formatPct(cell(annual, 'operating_margin').value),
       sub: cell(annual, 'net_margin') ? `Net margin ${formatPct(cell(annual, 'net_margin').value)}` : null,
     },
     fcf && { label: 'Free cash flow', value: money(fcf.value), sub: `${label(fcf)}${cell(annual, 'fcf_margin') ? ` · ${formatPct(cell(annual, 'fcf_margin').value)} of revenue` : ''}` },
     netCash && { label: 'Net cash (debt)', value: money(netCash.value), sub: `as of ${label(netCash)}` },
-    cell(annual, 'eps_diluted') && { label: 'Diluted EPS', value: formatUnit(cell(annual, 'eps_diluted').value, 'currency_per_share', currency), sub: <Delta value={cell(annual, 'eps_growth')?.value} /> },
-  ].filter(Boolean)
+    eps,
+  ]).filter(Boolean)
   if (!tiles.length) return null
   return (
     <section aria-label="Key financials" className="mb-8">
       <div className="grid grid-cols-2 border-t border-line md:grid-cols-3 xl:grid-cols-6">
         {tiles.map((t) => <Tile key={t.label} {...t} />)}
       </div>
-      <p className="mt-3 text-[11px] text-muted">From the XBRL data tagged in the company&apos;s filings; growth is year over year.</p>
+      <p className="mt-3 text-[11px] text-muted">
+        From the XBRL data tagged in the company&apos;s filings; growth is year over year.
+        {financials.interim?.annual_only ? ' Annual figures only: the company\'s interim results are not tagged (see Financials).' : ''}
+      </p>
     </section>
   )
 }
@@ -183,8 +203,8 @@ export default function OverviewTab({ research, request, onNavigate }) {
       </div>
       {financials.annual?.rows?.length > 0 && (
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-          <RevenueCashChart table={financials.annual} currency={financials.currency ?? 'USD'} />
-          <MarginChart table={financials.annual} />
+          <RevenueCashChart table={financials.annual} currency={financials.currency ?? 'USD'} profile={financials.profile} />
+          <MarginChart table={financials.annual} profile={financials.profile} />
         </div>
       )}
     </div>

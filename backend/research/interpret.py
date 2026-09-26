@@ -331,7 +331,10 @@ class SynthesisInput:
 
 DIGEST_ROWS = ("revenue", "revenue_growth", "gross_margin", "operating_margin", "net_income", "net_margin",
                "operating_cash_flow", "free_cash_flow", "cash_conversion", "capex", "buybacks", "net_cash",
-               "receivable_days", "inventory_days")
+               "receivable_days", "inventory_days",
+               # banks
+               "net_interest_income", "noninterest_income", "credit_loss_expense", "operating_expenses",
+               "cost_income_ratio", "roe", "loans", "deposits", "loans_to_deposits")
 
 
 def synthesis_input(payload: dict, extractions: list[tuple[dict, dict]]) -> SynthesisInput:
@@ -384,13 +387,22 @@ def synthesis_input(payload: dict, extractions: list[tuple[dict, dict]]) -> Synt
     for bridge in bridges:
         ref = f"e.{bridge['label'].replace(' ', '_')}"
         refs[ref] = {"type": "bridge", "label": f"Earnings bridge, {bridge['label']}"}
-        share = bridge.get("non_operating_share_of_pretax")
-        parts = [f"operating income {_money(bridge['operating_income'], currency)}",
-                 f"non-operating {_money(bridge['non_operating'], currency)}",
-                 f"pretax {_money(bridge['pretax_income'], currency)}", f"tax {_money(bridge['income_tax'], currency)}",
-                 f"net income {_money(bridge['net_income'], currency)}"]
-        if share is not None:
-            parts.append(f"non-operating share of pretax {share * 100:.1f}%")
+        if bridge.get("kind") == "bank":
+            parts = [f"{name} {_money(bridge[key], currency)}" for key, name in (
+                ("revenue", "total revenues"), ("net_interest_income", "net interest income"),
+                ("fee_income", "net fee and commission income"), ("credit_loss_expense", "credit loss expense"),
+                ("operating_expenses", "operating expenses"), ("pretax_income", "pretax"), ("income_tax", "tax"),
+                ("net_income", "net income")) if bridge.get(key) is not None]
+            if bridge.get("cost_income_ratio") is not None:
+                parts.append(f"cost/income ratio {bridge['cost_income_ratio'] * 100:.1f}%")
+        else:
+            share = bridge.get("non_operating_share_of_pretax")
+            parts = [f"operating income {_money(bridge['operating_income'], currency)}",
+                     f"non-operating {_money(bridge['non_operating'], currency)}",
+                     f"pretax {_money(bridge['pretax_income'], currency)}", f"tax {_money(bridge['income_tax'], currency)}",
+                     f"net income {_money(bridge['net_income'], currency)}"]
+            if share is not None:
+                parts.append(f"non-operating share of pretax {share * 100:.1f}%")
         items = "; ".join(f"{i['label']} {_money(i['value'], currency)}" for i in bridge["items"][:6])
         lines.append(f"{ref} {bridge['label']}: " + ", ".join(parts) + (f". Items: {items}" if items else ""))
 
