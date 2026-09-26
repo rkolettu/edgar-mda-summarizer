@@ -1,0 +1,78 @@
+name: Ingest filings
+
+# Parses new SEC filings for the showcase watchlist (backend/research/watchlist.txt) into the research database, so
+# those company pages load instantly. Parsing makes no model calls. When the GEMINI_API_KEY secret is set, the AI
+# analysis is also written for companies that lack it (once per new filing; free-tier Gemini).
+# Needs repository secrets DATABASE_URL (the Neon connection string) and SEC_USER_AGENT ("App name contact@email");
+# GEMINI_API_KEY (and optionally MISTRAL_API_KEY as a fallback) are optional.
+
+on:
+  schedule:
+    - cron: "37 11 * * *" # daily, after EDGAR's overnight batch
+  workflow_dispatch:
+    inputs:
+      tickers:
+        description: "Tickers to ingest, space separated (blank = the watchlist)"
+        required: false
+        default: ""
+      force:
+        description: "Re-parse filings already stored at this parser version"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+    steps:
+      - name: Check configuration
+        id: config
+        run: |
+          if [ -z "$DATABASE_URL" ] || [ -z "$SEC_USER_AGENT" ]; then
+            echo "::notice::Add the DATABASE_URL and SEC_USER_AGENT repository secrets to enable ingestion."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.config.outputs.ready == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.config.outputs.ready == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        if: steps.config.outputs.ready == 'true'
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Ingest
+        if: steps.config.outputs.ready == 'true'
+        working-directory: backend
+        env:
+          TICKERS: ${{ inputs.tickers }}
+          FORCE: ${{ inputs.force && '--force' || '' }}
+        run: |
+          INTERPRET=""
+          if [ -n "$GEMINI_API_KEY" ] || [ -n "$MISTRAL_API_KEY" ]; then INTERPRET="--interpret"; fi
+          if [ -n "$TICKERS" ]; then
+            python -m research.ingest $TICKERS $FORCE $INTERPRET
+          else
+            python -m research.ingest --watchlist $FORCE $INTERPRET
+          fi

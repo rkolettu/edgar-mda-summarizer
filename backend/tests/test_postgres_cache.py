@@ -4,13 +4,7 @@ import pytest
 
 import cache
 
-pgserver = pytest.importorskip("pgserver")
-
-
-@pytest.fixture(scope="session")
-def pg_url(tmp_path_factory):
-    server = pgserver.get_server(tmp_path_factory.mktemp("pg"), cleanup_mode="stop")
-    yield server.get_uri()
+pytest.importorskip("pgserver")
 
 
 @pytest.fixture

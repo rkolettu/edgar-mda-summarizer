@@ -6,3 +6,4 @@ google-genai
 pydantic
 python-dotenv
 psycopg[binary]
+lxml

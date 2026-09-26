@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import contextvars
 import os
 import re
+from contextlib import contextmanager
 from functools import lru_cache
 from urllib.parse import quote_plus, urljoin
 
@@ -21,6 +23,13 @@ MIN_SECTION_CHARS = 2_000
 FOREIGN_MDNA_CHARS = 120_000
 
 SEP = r"\s*[.:\-–—|]?\s*"
+
+
+def spaced(phrase: str) -> str:
+    """A heading pattern that tolerates the stray spaces some filings put inside words ("FINAN CIAL")."""
+    return r"\s+".join(r"\s?".join(re.escape(ch) for ch in word) for word in phrase.split())
+
+
 # Some filers repeat the company name inside the heading ("Item 7. Bank of America Corporation and Subsidiaries
 # Management's Discussion and Analysis").
 ITEM7_START = re.compile(
@@ -28,9 +37,12 @@ ITEM7_START = re.compile(
     re.IGNORECASE,
 )
 ITEM7_END = re.compile(r"i\s*t\s*e\s*m\s*(?:7a\s*[.:\-–—|]?\s+quantitative|8\s*(?:[.:\-–—|]|\s+financial\s+statements))", re.IGNORECASE)
-ITEM1A_START = re.compile(rf"i\s*t\s*e\s*m\s*1a{SEP}risk\s+factors", re.IGNORECASE)
+# Some filings break words inside headings ("ITEM 1A. RIS K FACTORS", Microsoft).
+ITEM1A_START = re.compile(rf"i\s*t\s*e\s*m\s*1a{SEP}{spaced('risk factors')}", re.IGNORECASE)
 ITEM1A_END = re.compile(
-    rf"i\s*t\s*e\s*m\s*1b{SEP}unresolved\s+staff|i\s*t\s*e\s*m\s*1c{SEP}cybersecurity|i\s*t\s*e\s*m\s*2{SEP}properties", re.IGNORECASE
+    rf"i\s*t\s*e\s*m\s*1b{SEP}{spaced('unresolved staff')}|i\s*t\s*e\s*m\s*1c{SEP}{spaced('cybersecurity')}"
+    rf"|i\s*t\s*e\s*m\s*2{SEP}{spaced('properties')}",
+    re.IGNORECASE,
 )
 TENQ_MDNA_START = re.compile(rf"i\s*t\s*e\s*m\s*2{SEP}management'?s\s+discussion\s+and\s+analysis", re.IGNORECASE)
 TENQ_MDNA_END = re.compile(rf"i\s*t\s*e\s*m\s*3{SEP}quantitative|i\s*t\s*e\s*m\s*4{SEP}controls\s+and\s+procedures", re.IGNORECASE)
@@ -214,13 +226,36 @@ def archive_url(cik: int, accession_number: str, filename: str) -> str:
     )
 
 
+# The research pipeline keeps paragraphs and table rows as lines (risk factor headings, sentence boundaries after a
+# table row); the legacy summary flattens everything to one line. Section patterns match either, since \s covers
+# newlines.
+_KEEP_LINES = contextvars.ContextVar("keep_lines", default=False)
+BLOCK_TAG = re.compile(r"(<(?:/?(?:p|div|tr|li|h[1-6]|table|section|ul|ol|center)|br)\b[^>]*>)", re.IGNORECASE)
+
+
+@contextmanager
+def keeping_lines():
+    token = _KEEP_LINES.set(True)
+    try:
+        yield
+    finally:
+        _KEEP_LINES.reset(token)
+
+
 def html_to_text(html: str) -> str:
+    keep_lines = _KEEP_LINES.get()
+    if keep_lines:
+        html = BLOCK_TAG.sub("\\1\n", html)
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script", "style", "head"]):
         tag.decompose()
     text = soup.get_text(separator=" ")
-    text = text.replace("\xa0", " ").replace("’", "'").replace("“", '"').replace("”", '"')
-    return re.sub(r"\s+", " ", text).strip()
+    # Zero-width spaces are invisible in the filing but split words and headings for the regexes below.
+    text = text.replace("\xa0", " ").replace("\u200b", "").replace("’", "'").replace("“", '"').replace("”", '"')
+    if not keep_lines:
+        return re.sub(r"\s+", " ", text).strip()
+    lines = (re.sub(r"[^\S\n]+", " ", line).strip() for line in text.split("\n"))
+    return "\n".join(line for line in lines if line)
 
 
 ANY_ITEM_HEADING = re.compile(r"\bi\s*t\s*e\s*m\s*\d{1,2}[a-c]?\s*[.:\-–—|]?\s", re.IGNORECASE)
@@ -353,6 +388,23 @@ def extract_item7(text: str) -> str | None:
     return extract_section(text, ITEM7_START, ITEM7_END)
 
 
+ITEM1_START = re.compile(rf"i\s*t\s*e\s*m\s*1{SEP}{spaced('business')}\b", re.IGNORECASE)
+ITEM1_END = ITEM1A_START
+TWENTYF_ITEM4_START = re.compile(rf"i\s*t\s*e\s*m\s*4{SEP}information\s+on\s+the\s+company", re.IGNORECASE)
+TWENTYF_ITEM4_END = re.compile(
+    rf"i\s*t\s*e\s*m\s*4a{SEP}unresolved|i\s*t\s*e\s*m\s*5{SEP}operating\s+and\s+financial", re.IGNORECASE)
+BUSINESS_CHARS = 60_000
+
+
+def extract_business(text: str, form: str = "10-K") -> str | None:
+    """Item 1 Business of a 10-K, or Item 4 Information on the Company of a 20-F."""
+    start, end = (TWENTYF_ITEM4_START, TWENTYF_ITEM4_END) if form == "20-F" else (ITEM1_START, ITEM1_END)
+    section = extract_section(text, start, end)
+    if section and "incorporated by reference" in section[:1_500].lower() and len(section) < 10_000:
+        return None  # a pointer into an annual report, not the description itself
+    return section[:BUSINESS_CHARS] if section else None
+
+
 def extract_risk_factors(text: str) -> str | None:
     section = extract_section(text, ITEM1A_START, ITEM1A_END)
     return section[:RISK_FACTORS_CHARS] if section else None
@@ -369,11 +421,6 @@ UBS_OPERATING_END = re.compile(
     re.IGNORECASE,
 )
 UBS_RISK_START = re.compile(r"Risk factors\s+Certain risks,\s+including those described below", re.IGNORECASE)
-
-
-def spaced(phrase: str) -> str:
-    """A heading pattern that tolerates the stray spaces some filings put inside words ("FINAN CIAL")."""
-    return r"\s+".join(r"\s?".join(re.escape(ch) for ch in word) for word in phrase.split())
 
 
 TWENTYF_START = re.compile(
@@ -421,14 +468,25 @@ def extract_20f_risk_factors(text: str) -> str | None:
     return item3[heading.start():heading.start() + RISK_FACTORS_CHARS]
 
 
+# The heading may carry its date first ("Management's Discussion and Analysis February 25, 2026 This MD&A ...").
 FORTYF_MDNA_START = re.compile(
-    r"management'?s\s+discussion\s+and\s+analysis\s+(?:this\s+management'?s\s+discussion\s+and\s+analysis|management'?s\s+discussion\s+and\s+analysis\s*\(md&a\)|about\s+[a-z]+)",
+    r"management'?s\s+discussion\s+and\s+analysis\s+(?:(?:dated\s+)?[A-Z][a-z]+\s+\d{1,2},\s+\d{4}\s+)?(?:this\s+management'?s\s+discussion\s+and\s+analysis|management'?s\s+discussion\s+and\s+analysis\s*\(md&a\)|about\s+[a-z]+)",
     re.IGNORECASE,
 )
 FORTYF_REFERENCE = re.compile(
     r"(?:exhibit\s+(99[.\-]\d+|2)\s*:\s*management'?s\s+discussion\s+and\s+analysis|management'?s\s+discussion\s+and\s+analysis.{0,140}?(?:exhibit\s+(99[.\-]\d+|2)))",
     re.IGNORECASE,
 )
+# The 40-F's exhibit index row ("99-3 Management's Discussion and Analysis ..."). Checked before prose references, which
+# can list several documents and exhibits in one sentence (Suncor: "AIF, ..., MD&A ... included as Exhibit 99-1, 99-2, 99-3").
+FORTYF_EXHIBIT_ROW = re.compile(r"\b(99[.\-]\d+)[\s\u200b|:.\-–—]*management'?s\s+discussion\s+and\s+analysis", re.IGNORECASE)
+
+
+def fortyf_mdna_exhibits(text: str) -> list[str]:
+    """Candidate MD&A exhibit types, most specific evidence first."""
+    numbers = [m.group(1) for m in FORTYF_EXHIBIT_ROW.finditer(text)]
+    numbers += [m.group(1) or m.group(2) for m in FORTYF_REFERENCE.finditer(text)]
+    return list(dict.fromkeys("EX-" + n.upper().replace("-", ".") for n in numbers))
 
 
 # 20-Fs that are a cross-reference index into an integrated annual report title the operating review as an annual
@@ -464,9 +522,9 @@ def extract_annual_report_review(text: str) -> str | None:
     return None
 
 
-def load_20f(cik: int, filing: dict) -> dict:
+def load_20f(cik: int, filing: dict, html: str | None = None) -> dict:
     document_url = archive_url(cik, filing["accession_number"], filing["primary_doc"])
-    text = html_to_text(sec_get(document_url).text)
+    text = html_to_text(html if html is not None else sec_get(document_url).text)
     mdna_url = document_url
     operating = extract_section(text, UBS_OPERATING_START, UBS_OPERATING_END)
     source = "operating_review"
@@ -505,23 +563,29 @@ def load_20f(cik: int, filing: dict) -> dict:
     operating = operating[:FOREIGN_MDNA_CHARS]
     return {**filing, "document_url": document_url, "currency": detect_currency(operating),
             "mdna": {"text": operating, "source": source, "url": mdna_url},
-            "risk_factors": risks}
+            "risk_factors": risks, "business": extract_business(text, "20-F")}
 
 
-def load_40f(cik: int, filing: dict) -> dict:
+def load_40f(cik: int, filing: dict, html: str | None = None) -> dict:
     document_url = archive_url(cik, filing["accession_number"], filing["primary_doc"])
-    text = html_to_text(sec_get(document_url).text)
-    reference = FORTYF_REFERENCE.search(text)
-    if not reference:
+    text = html_to_text(html if html is not None else sec_get(document_url).text)
+    candidates = fortyf_mdna_exhibits(text)
+    if not candidates:
         raise HTTPException(status_code=422, detail="Could not locate a management discussion exhibit in this 40-F.")
-    exhibit_type = "EX-" + (reference.group(1) or reference.group(2)).upper().replace("-", ".")
-    exhibit_url = find_exhibit(cik, filing["accession_number"], exhibit_type)
-    if not exhibit_url:
-        raise HTTPException(status_code=422, detail="The 40-F management discussion exhibit is unavailable.")
-    exhibit_text = html_to_text(sec_get(exhibit_url).text)
-    # The exhibit must itself identify as MD&A near the beginning; do not summarize financial statements.
-    start = FORTYF_MDNA_START.search(exhibit_text[:30_000])
-    if not start or len(exhibit_text) - start.start() < 5_000:
+    found_any = False
+    for exhibit_type in candidates:
+        exhibit_url = find_exhibit(cik, filing["accession_number"], exhibit_type)
+        if not exhibit_url:
+            continue
+        found_any = True
+        exhibit_text = html_to_text(sec_get(exhibit_url).text)
+        # The exhibit must itself identify as MD&A near the beginning; do not summarize financial statements.
+        start = FORTYF_MDNA_START.search(exhibit_text[:30_000])
+        if start and len(exhibit_text) - start.start() >= 5_000:
+            break
+    else:
+        if not found_any:
+            raise HTTPException(status_code=422, detail="The 40-F management discussion exhibit is unavailable.")
         raise HTTPException(status_code=422, detail="Could not verify the management discussion in this 40-F exhibit.")
     risks = None
     risk_match = re.search(r"Risk Factors that May Affect Future Results\s+", exhibit_text[10_000:], re.IGNORECASE)
@@ -557,20 +621,21 @@ def find_exhibit(cik: int, accession_number: str, exhibit_type: str) -> str | No
     return None
 
 
-def load_10k(cik: int, filing: dict) -> dict:
+def load_10k(cik: int, filing: dict, html: str | None = None) -> dict:
     document_url = archive_url(cik, filing["accession_number"], filing["primary_doc"])
-    text = html_to_text(sec_get(document_url).text)
+    text = html_to_text(html if html is not None else sec_get(document_url).text)
     return {
         **filing,
         "document_url": document_url,
         "mdna": extract_mdna(cik, filing, text, document_url),
         "risk_factors": extract_risk_factors(text),
+        "business": extract_business(text),
     }
 
 
-def load_10q(cik: int, filing: dict) -> dict:
+def load_10q(cik: int, filing: dict, html: str | None = None) -> dict:
     document_url = archive_url(cik, filing["accession_number"], filing["primary_doc"])
-    text = html_to_text(sec_get(document_url).text)
+    text = html_to_text(html if html is not None else sec_get(document_url).text)
     mdna = extract_section(text, TENQ_MDNA_START, TENQ_MDNA_END)
     if mdna is None:
         raise HTTPException(status_code=422, detail="Could not isolate Item 2 MD&A in the 10-Q.")

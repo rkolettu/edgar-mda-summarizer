@@ -254,3 +254,23 @@ def fake_gemini(monkeypatch):
 @pytest.fixture
 def client(fake_sec, fake_gemini):
     return TestClient(main.app)
+
+
+@pytest.fixture(scope="session")
+def pg_url(tmp_path_factory):
+    """A throwaway Postgres server shared by every database test in the session."""
+    pgserver = pytest.importorskip("pgserver")
+    server = pgserver.get_server(tmp_path_factory.mktemp("pg"), cleanup_mode="stop")
+    yield server.get_uri()
+
+
+@pytest.fixture
+def research_conn(pg_url, monkeypatch):
+    from research import db
+
+    monkeypatch.setenv("DATABASE_URL", pg_url)
+    conn = db.connect(pg_url)
+    conn.execute("TRUNCATE companies, filings, filing_sections, facts, fact_sources, analysis_runs, member_aliases, "
+                 "research_snapshots, filing_changes, model_outputs RESTART IDENTITY CASCADE")
+    yield conn
+    conn.close()

@@ -6,6 +6,22 @@ export async function getJson(path, params, signal) {
   if (res.status === 429) {
     throw new Error('This app uses my Gemini API key and has reached its usage limit. Please try again in about 3 hours.')
   }
-  if (!res.ok) throw new Error(body.detail || `Request failed (${res.status})`)
+  if (!res.ok) {
+    const error = new Error(body.detail || `Request failed (${res.status})`)
+    error.status = res.status
+    throw error
+  }
+  return body
+}
+
+// Research endpoints report their own reasons (a spent model quota, a filing that cannot be read) in `detail`.
+export async function postJson(path, signal) {
+  const res = await fetch(`${API_BASE}${path}`, { method: 'POST', signal })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    const error = new Error(body.detail || `Request failed (${res.status})`)
+    error.status = res.status
+    throw error
+  }
   return body
 }
