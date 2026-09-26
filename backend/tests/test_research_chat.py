@@ -82,3 +82,9 @@ def test_ranking_prefers_passages_about_the_question():
     ranked = chat.rank(chat.chunks(sections, filings), "What do export controls mean for China sales?")
     assert ranked[0].text.startswith("Export controls") and ranked[0].id == "S1"
     assert chat.rank(chat.chunks(sections, filings), "the of and") == []
+
+
+def test_tidy_removes_emphasis_and_joins_spaced_units():
+    assert chat.tidy("- Commitments total **$366.0 B** [F]; guarantees **$860.0 M**.") == \
+        "- Commitments total $366.0B [F]; guarantees $860.0M."
+    assert chat.tidy("It raised $25.0 Billion and $3 million.") == "It raised $25.0 Billion and $3 million."
