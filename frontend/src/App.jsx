@@ -6,6 +6,7 @@ import BusinessTab from './components/BusinessTab'
 import CapitalDeploymentChart from './components/CapitalDeploymentChart'
 import CapitalTab from './components/CapitalTab'
 import ChangesSection from './components/ChangesSection'
+import CompanySearch from './components/CompanySearch'
 import EarningsTab from './components/EarningsTab'
 import FilingChangesTab from './components/FilingChangesTab'
 import FilingChat from './components/FilingChat'
@@ -128,36 +129,46 @@ function Warnings({ items }) {
   )
 }
 
-function EmptyState({ onPick }) {
+function EmptyState({ onPick, query, onQueryChange }) {
   return (
-    <div className="pt-10 sm:pt-16">
-      <div className="grid gap-12 border-b border-line pb-16 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)] lg:items-end lg:gap-16 lg:pb-24">
-        <div>
-          <p className="mb-7 text-[11px] font-semibold tracking-[0.16em] text-accent uppercase">SEC EDGAR / Filing research</p>
-          <h1 className="max-w-[12ch] text-[clamp(3.25rem,7vw,6.75rem)] leading-[0.98] font-semibold tracking-[-0.065em] text-ink">Read beyond the numbers.</h1>
-        </div>
-        <div className="lg:pb-2">
-          <p className="max-w-md text-lg leading-relaxed text-ink-2">
-            Start with a company. Follow the financials, see what management says changed, and trace each insight back to the filing.
-          </p>
-          <p className="mt-8 mb-3 text-[11px] font-semibold tracking-[0.12em] text-muted uppercase">Try a company</p>
+    <div className="pt-5 sm:pt-10">
+      <div className="border-b border-line pb-10 sm:pb-12">
+        <p className="mb-5 flex items-center gap-3 text-[11px] font-semibold tracking-[0.14em] text-gold uppercase before:h-[2px] before:w-6 before:bg-gold before:content-['']">Investment research</p>
+        <h1 className="display-heading max-w-4xl text-[clamp(3.1rem,7vw,5.5rem)] leading-[1.06] font-medium tracking-[-0.035em] text-ink">Company filings.<br />Clearly summarized<span className="text-gold">.</span></h1>
+        <p className="mt-5 max-w-2xl text-base leading-relaxed text-ink-2 sm:text-lg">
+          Review management’s discussion of financial results, cash flow, and business risks. Start with a company name or ticker.
+        </p>
+      </div>
+      <div className="flex flex-wrap items-baseline justify-between gap-2 py-6">
+        <h2 className="display-heading text-3xl font-medium tracking-[-0.025em] text-ink">Start your research</h2>
+        <span className="text-xs text-muted">Management discussion &amp; analysis</span>
+      </div>
+      <div className="grid gap-5 pb-12 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+        <section className="rounded-2xl border border-line bg-panel p-6 sm:p-8">
+          <p className="mb-6 text-[11px] font-semibold tracking-[0.12em] text-muted uppercase">Company search</p>
+          <h3 className="display-heading mb-2 text-3xl font-medium tracking-[-0.025em] text-ink">Find a company</h3>
+          <p className="mb-6 text-sm text-ink-2">Search for the company you want to research.</p>
+          <CompanySearch query={query} onQueryChange={onQueryChange} onSubmit={onPick} prominent />
+          <p className="mt-6 mb-3 text-xs text-muted">Try a company</p>
           <div className="flex flex-wrap gap-2">
             {QUICK_TICKERS.map((t) => (
-              <button
-                key={t}
-                onClick={() => onPick(t)}
-                className="group inline-flex items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 font-mono text-xs text-ink transition-colors hover:border-ink"
-              >
-                {t}<ArrowUpRight size={12} className="text-muted group-hover:text-ink" aria-hidden />
+              <button key={t} onClick={() => onPick(t)}
+                className="group inline-flex min-h-10 items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 font-mono text-xs text-ink transition-colors hover:border-gold">
+                {t}<ArrowUpRight size={12} className="text-gold" aria-hidden />
               </button>
             ))}
           </div>
-        </div>
-      </div>
-      <div className="grid gap-7 py-9 text-sm sm:grid-cols-3 sm:gap-10">
-        <p className="text-ink-2"><span className="mr-3 font-mono text-xs text-muted">01</span> Five years of financial trends</p>
-        <p className="text-ink-2"><span className="mr-3 font-mono text-xs text-muted">02</span> Changes in management's story</p>
-        <p className="text-ink-2"><span className="mr-3 font-mono text-xs text-muted">03</span> Quotes from original filings</p>
+        </section>
+        <section className="rounded-2xl border border-line bg-panel p-6 sm:p-8">
+          <p className="mb-6 text-[11px] font-semibold tracking-[0.12em] text-muted uppercase">Inside the MD&amp;A</p>
+          <h3 className="display-heading mb-2 text-3xl font-medium tracking-[-0.025em] text-ink">Management’s perspective</h3>
+          <p className="mb-5 text-sm leading-relaxed text-ink-2">How management explains the company’s performance and financial position.</p>
+          <ol className="divide-y divide-line text-sm text-ink">
+            <li className="flex gap-4 py-3"><span className="font-mono text-xs text-gold">01</span> Operating results</li>
+            <li className="flex gap-4 py-3"><span className="font-mono text-xs text-gold">02</span> Liquidity &amp; capital resources</li>
+            <li className="flex gap-4 py-3"><span className="font-mono text-xs text-gold">03</span> Risks &amp; uncertainties</li>
+          </ol>
+        </section>
       </div>
       <AboutProject />
     </div>
@@ -386,7 +397,7 @@ export default function App() {
   const tabProps = { research: research.data, request: insightsRequest }
   return (
     <div className="flex min-h-screen flex-col bg-page">
-      <SearchHeader query={query} onQueryChange={setQuery} onSubmit={runAnalysis} loading={loading} onHome={goHome} />
+      <SearchHeader query={query} onQueryChange={setQuery} onSubmit={runAnalysis} loading={loading} onHome={goHome} landing={idle} />
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-10 sm:px-8 sm:py-12">
         {loading && (
@@ -398,7 +409,7 @@ export default function App() {
 
         {failed && <FailureAlert query={activeQuery} message={summary.error} />}
 
-        {idle && <EmptyState onPick={runAnalysis} />}
+        {idle && <EmptyState onPick={runAnalysis} query={query} onQueryChange={setQuery} />}
 
         {showPage && (
           <>

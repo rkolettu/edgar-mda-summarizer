@@ -3,16 +3,18 @@
 @theme {
   --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: "Source Serif 4", Georgia, serif;
 
-  --color-page: #f4f1ea;
-  --color-panel: #fffefa;
-  --color-panel-2: #f7f5f0;
-  --color-line: #dcd8d0;
-  --color-ink: #171717;
-  --color-ink-2: #575650;
-  --color-muted: #716e68;
-  --color-accent: #2d5694;
-  --color-accent-hover: #1e4074;
+  --color-page: #f6f8fb;
+  --color-panel: #ffffff;
+  --color-panel-2: #edf2f7;
+  --color-line: #dde3eb;
+  --color-ink: #142b49;
+  --color-ink-2: #4d6075;
+  --color-muted: #66788d;
+  --color-accent: #264b73;
+  --color-accent-hover: #173757;
+  --color-gold: #8b681e;
   --color-danger: #a43e39;
 }
 
@@ -24,7 +26,7 @@ body,
 
 body {
   margin: 0;
-  background: radial-gradient(circle at top right, rgba(29, 78, 216, 0.045), transparent 34%), var(--color-page);
+  background: var(--color-page);
   color: var(--color-ink);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
@@ -33,12 +35,14 @@ body {
 /* In the base layer so utilities (text-xs) still size buttons. */
 @layer base {
   button, input { font: inherit; }
+  h1, h2 { font-family: var(--font-display); }
 }
+.display-heading { font-family: var(--font-display); }
 button { cursor: pointer; }
-::selection { background: #dce6f4; color: #171717; }
+::selection { background: #dce6f4; color: var(--color-ink); }
 :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 
-.editorial-card { box-shadow: 0 12px 32px rgba(36, 31, 24, 0.035); }
+.editorial-card { box-shadow: 0 12px 32px rgba(20, 43, 73, 0.045); }
 
 .loading-rule::after {
   content: "";
