@@ -71,6 +71,9 @@ button { cursor: pointer; }
 
 /* ---- Landing page ---- */
 
+/* Thins the candlestick field where it runs under the text on its left. */
+.field-fade { mask-image: linear-gradient(to right, transparent, black 38%); }
+
 .reveal {
   opacity: 0;
   transform: translateY(20px);
@@ -111,14 +114,6 @@ button { cursor: pointer; }
   38%, 88% { opacity: 1; transform: none; }
   100% { opacity: 0; transform: none; }
 }
-/* Inside feature cards, the badge pops once when the card scrolls in. */
-.feature .badge-pop { animation: none; opacity: 0; }
-.feature.is-shown .badge-pop { animation: pop-once 500ms 700ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
-@keyframes pop-once {
-  from { opacity: 0; transform: translateY(4px) scale(0.96); }
-  to { opacity: 1; transform: none; }
-}
-
 .grow-y { transform-box: fill-box; transform-origin: bottom; animation: grow-y 900ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 @keyframes grow-y {
   from { transform: scaleY(0); }
@@ -134,21 +129,6 @@ button { cursor: pointer; }
 .dot-in { animation: fade-in 300ms both; }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 
-/* Feature illustrations wait until their card scrolls in. */
-.feature .grow-y,
-.feature .grow-x,
-.feature .draw,
-.feature .dot-in,
-.feature .bubble-in,
-.feature .chip-in { animation-play-state: paused; }
-.feature.is-shown .grow-y,
-.feature.is-shown .grow-x,
-.feature.is-shown .draw,
-.feature.is-shown .dot-in,
-.feature.is-shown .bubble-in,
-.feature.is-shown .chip-in { animation-play-state: running; }
-.bubble-in { animation: rise-in 600ms 300ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
-.chip-in { animation: rise-in 500ms 300ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 .row-in { animation: rise-in 450ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 .step-in { animation: rise-in 450ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 @keyframes rise-in {
@@ -187,9 +167,7 @@ button { cursor: pointer; }
   .reveal,
   .parallax { transition: none; }
   .reveal { opacity: 1; transform: none; }
-  .landing *,
-  .landing .feature .badge-pop { animation: none !important; }
-  .landing .feature .badge-pop,
+  .landing * { animation: none !important; }
   .landing .badge-pop { opacity: 1; }
   .landing .draw,
   .landing .scribble path { stroke-dashoffset: 0; }
