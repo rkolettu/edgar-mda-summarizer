@@ -6,18 +6,22 @@ const HEADLINE_WORDS = ['numbers', 'headlines', 'footnotes', 'guidance']
 
 // The showcase companies (backend/research/watchlist.txt) load instantly; the rest are parsed on the first visit.
 const COMPANIES = [
-  { ticker: 'NVDA', name: 'NVIDIA' },
-  { ticker: 'AAPL', name: 'Apple' },
-  { ticker: 'MSFT', name: 'Microsoft' },
-  { ticker: 'AMZN', name: 'Amazon' },
   { ticker: 'JPM', name: 'JPMorgan Chase' },
-  { ticker: 'TSM', name: 'TSMC' },
-  { ticker: 'ASML', name: 'ASML' },
-  { ticker: 'SU', name: 'Suncor Energy' },
-  { ticker: 'TD', name: 'Toronto-Dominion Bank' },
-  { ticker: 'HSBC', name: 'HSBC' },
-  { ticker: 'SHEL', name: 'Shell' },
+  { ticker: 'BAC', name: 'Bank of America' },
+  { ticker: 'MSFT', name: 'Microsoft' },
+  { ticker: 'AAPL', name: 'Apple' },
+  { ticker: 'NVDA', name: 'NVIDIA' },
+  { ticker: 'AMZN', name: 'Amazon' },
+  { ticker: 'GOOGL', name: 'Alphabet' },
+  { ticker: 'LLY', name: 'Eli Lilly' },
+  { ticker: 'WMT', name: 'Walmart' },
+  { ticker: 'CAT', name: 'Caterpillar' },
+  { ticker: 'XOM', name: 'Exxon Mobil' },
+  { ticker: 'NEE', name: 'NextEra Energy' },
+  { ticker: 'PLD', name: 'Prologis' },
+  { ticker: 'FCX', name: 'Freeport-McMoRan' },
   { ticker: 'UBS', name: 'UBS' },
+  { ticker: 'TSM', name: 'TSMC' },
 ]
 
 const STEPS = [
