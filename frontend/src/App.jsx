@@ -1,5 +1,5 @@
 import { Analytics } from '@vercel/analytics/react'
-import { ArrowLeft, ArrowUpRight, ExternalLink, Info, TriangleAlert } from 'lucide-react'
+import { ArrowLeft, ExternalLink, Info, TriangleAlert } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import AnalysisSection from './components/AnalysisSection'
 import BusinessTab from './components/BusinessTab'
@@ -11,6 +11,7 @@ import FilingChangesTab from './components/FilingChangesTab'
 import FilingChat from './components/FilingChat'
 import FinancialsTab from './components/FinancialsTab'
 import KpiStrip from './components/KpiStrip'
+import Landing from './components/Landing'
 import LatestQuarter from './components/LatestQuarter'
 import LoadingState from './components/LoadingState'
 import OverviewTab from './components/OverviewTab'
@@ -21,8 +22,6 @@ import Tabs, { TabPanel } from './components/Tabs'
 import { MarginsChart, RevenueFcfChart } from './components/TrendCharts'
 import { getJson, postJson } from './lib/api'
 import { fiscalYearLabel } from './lib/format'
-
-const QUICK_TICKERS = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'JPM']
 
 const MDNA_SOURCE_LABELS = {
   item7: 'Item 7 MD&A',
@@ -128,73 +127,6 @@ function Warnings({ items }) {
   )
 }
 
-function EmptyState({ onPick }) {
-  return (
-    <div className="pt-10 sm:pt-16">
-      <div className="grid gap-12 border-b border-line pb-16 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)] lg:items-end lg:gap-16 lg:pb-24">
-        <div>
-          <p className="mb-7 text-[11px] font-semibold tracking-[0.16em] text-accent uppercase">SEC EDGAR / Filing research</p>
-          <h1 className="max-w-[12ch] text-[clamp(3.25rem,7vw,6.75rem)] leading-[0.98] font-semibold tracking-[-0.065em] text-ink">Read beyond the numbers.</h1>
-        </div>
-        <div className="lg:pb-2">
-          <p className="max-w-md text-lg leading-relaxed text-ink-2">
-            Start with a company. Follow the financials, see what management says changed, and trace each insight back to the filing.
-          </p>
-          <p className="mt-8 mb-3 text-[11px] font-semibold tracking-[0.12em] text-muted uppercase">Try a company</p>
-          <div className="flex flex-wrap gap-2">
-            {QUICK_TICKERS.map((t) => (
-              <button
-                key={t}
-                onClick={() => onPick(t)}
-                className="group inline-flex items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 font-mono text-xs text-ink transition-colors hover:border-ink"
-              >
-                {t}<ArrowUpRight size={12} className="text-muted group-hover:text-ink" aria-hidden />
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-      <div className="grid gap-7 py-9 text-sm sm:grid-cols-3 sm:gap-10">
-        <p className="text-ink-2"><span className="mr-3 font-mono text-xs text-muted">01</span> Five years of financial trends</p>
-        <p className="text-ink-2"><span className="mr-3 font-mono text-xs text-muted">02</span> Changes in management's story</p>
-        <p className="text-ink-2"><span className="mr-3 font-mono text-xs text-muted">03</span> Quotes from original filings</p>
-      </div>
-      <AboutProject />
-    </div>
-  )
-}
-
-// What to expect: how the figures are read, which AI writes the analysis, and what kind of project this is.
-function AboutProject() {
-  return (
-    <section aria-labelledby="about-heading" className="mb-6 rounded-2xl border border-line bg-panel px-6 py-6 sm:px-8 sm:py-7">
-      <h2 id="about-heading" className="mb-4 flex items-center gap-2 text-base font-semibold tracking-[-0.025em] text-ink">
-        <Info size={16} className="text-accent" aria-hidden /> A passion project, with some rough edges
-      </h2>
-      <div className="grid gap-5 text-sm leading-relaxed text-ink-2 md:grid-cols-3 md:gap-8">
-        <p>
-          <span className="font-semibold text-ink">Parsed, not hand-checked.</span> Figures are read by code from the
-          machine-readable tags in each filing, and every company tags a little differently. Some tables can look off: a
-          blank cell, an oddly worded label, a period that is missing. Where the tool can tell why, a note under the table
-          says so.
-        </p>
-        <p>
-          <span className="font-semibold text-ink">Foreign companies are the hardest.</span> Companies outside the US
-          file Forms 20-F, 40-F and 6-K, which follow looser rules than a US 10-K or 10-Q. Many report every six months, or
-          put out their quarterly results in untagged press releases. Their pages can have more gaps and quirks than a US
-          company's.
-        </p>
-        <p>
-          <span className="font-semibold text-ink">Written by free-tier AI.</span> The analysis runs on Google&apos;s
-          lightweight Gemini models at no cost. Every figure and quote is checked against the filings, but a more capable
-          model would write sharper, more complete analysis. This is a personal project, not a commercial product, so
-          treat it as a starting point and read the original filing before relying on anything here.
-        </p>
-      </div>
-    </section>
-  )
-}
-
 function FailureAlert({ query, message }) {
   return (
     <div role="alert" className="mx-auto flex max-w-2xl items-start gap-3 rounded-xl border border-danger/30 bg-panel px-5 py-5 text-sm">
@@ -283,6 +215,7 @@ export default function App() {
   const [summary, setSummary] = useState({ status: 'idle' })
   const [tab, setTab] = useState('overview')
   const latestRequest = useRef(0)
+  const searchInput = useRef(null)
 
   const researchReady = research.status === 'ready'
   // The page appears once everything it will show is ready, the AI analysis included (or known to be unavailable).
@@ -383,12 +316,20 @@ export default function App() {
     return () => window.removeEventListener('popstate', open)
   }, [])
 
+  // The landing page's "Search a company" buttons: back to the top, into the search box.
+  function focusSearch() {
+    window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+    searchInput.current?.focus({ preventScroll: true })
+  }
+
   const tabProps = { research: research.data, request: insightsRequest }
   return (
     <div className="flex min-h-screen flex-col bg-page">
-      <SearchHeader query={query} onQueryChange={setQuery} onSubmit={runAnalysis} loading={loading} onHome={goHome} />
+      <SearchHeader query={query} onQueryChange={setQuery} onSubmit={runAnalysis} loading={loading} onHome={goHome} inputRef={searchInput} />
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-10 sm:px-8 sm:py-12">
+      {idle && <main className="flex-1"><Landing onPick={runAnalysis} onSearch={focusSearch} /></main>}
+
+      {!idle && <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-10 sm:px-8 sm:py-12">
         {loading && (
           <LoadingState
             ticker={activeQuery}
@@ -397,8 +338,6 @@ export default function App() {
         )}
 
         {failed && <FailureAlert query={activeQuery} message={summary.error} />}
-
-        {idle && <EmptyState onPick={runAnalysis} />}
 
         {showPage && (
           <>
@@ -420,7 +359,7 @@ export default function App() {
             )}
           </>
         )}
-      </main>
+      </main>}
 
       <footer className="mx-auto flex w-full max-w-6xl flex-col justify-between gap-2 border-t border-line px-5 py-6 text-[11px] text-muted sm:flex-row sm:px-8">
         <span>Source: SEC EDGAR · AI analysis: Google Gemini (free tier), checked against the filings · A personal project</span>
