@@ -14,7 +14,8 @@ const SUGGESTIONS = [
 function AnswerText({ text, figures, onCite }) {
   const marks = [
     ...(figures ?? []).filter((f) => !f.verified).map((f) => ({ start: f.start, end: f.end, kind: 'figure' })),
-    ...[...text.matchAll(/\[(S\d+|F)\]/g)].map((m) => ({ start: m.index, end: m.index + m[0].length, kind: 'cite', id: m[1] })),
+    // The server rewrites citations as [S1]; other bracket styles a model uses (【S1】) are linked too.
+    ...[...text.matchAll(/[[【［](S\d+|F)[\]】］]/g)].map((m) => ({ start: m.index, end: m.index + m[0].length, kind: 'cite', id: m[1] })),
   ].sort((a, b) => a.start - b.start)
   const parts = []
   let cursor = 0
