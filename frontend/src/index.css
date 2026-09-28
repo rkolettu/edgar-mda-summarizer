@@ -3,6 +3,7 @@
 @theme {
   --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: "Geist", "Inter", system-ui, sans-serif;
 
   --color-page: #f4f1ea;
   --color-panel: #fffefa;
@@ -60,4 +61,154 @@ button { cursor: pointer; }
 
 .recharts-wrapper *:focus {
   outline: none;
+}
+
+/* Header: a full-width bar at the top of the page that tucks into a floating pill once the page scrolls. */
+.header-shell {
+  transition: margin 400ms cubic-bezier(0.2, 0.8, 0.2, 1), max-width 400ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    padding 400ms cubic-bezier(0.2, 0.8, 0.2, 1), background-color 300ms, border-color 300ms, box-shadow 300ms,
+    border-radius 400ms;
+}
+
+/* ---- Landing page ---- */
+
+.pill-primary,
+.pill-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  height: 3.25rem;
+  padding: 0 1.5rem;
+  border-radius: 999px;
+  font-size: 1rem;
+  font-weight: 500;
+  transition: background-color 200ms, border-color 200ms, color 200ms, transform 200ms;
+}
+.pill-primary { background: var(--color-ink); color: var(--color-panel); }
+.pill-primary:hover { background: var(--color-accent); }
+.pill-secondary { border: 1px solid var(--color-line); background: var(--color-panel); color: var(--color-ink); }
+.pill-secondary:hover { border-color: var(--color-ink); }
+.pill-primary:active,
+.pill-secondary:active { transform: scale(0.98); }
+
+.hero-grid {
+  background-image:
+    linear-gradient(to right, rgba(23, 23, 23, 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(23, 23, 23, 0.045) 1px, transparent 1px);
+  background-size: 120px 120px;
+  mask-image: radial-gradient(ellipse at 30% 40%, black 20%, transparent 75%);
+}
+
+/* Thins the particle field where it runs under the text on its left. */
+.field-fade { mask-image: linear-gradient(to right, transparent, black 38%); }
+
+.reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 900ms cubic-bezier(0.2, 0.8, 0.2, 1), transform 900ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.reveal.is-shown { opacity: 1; transform: none; }
+
+.word-in { animation: word-in 700ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+@keyframes word-in {
+  from { opacity: 0; transform: translateY(0.35em); filter: blur(8px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+.underline-in { transform-origin: left; animation: underline-in 900ms 150ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+@keyframes underline-in {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+.marquee-mask {
+  overflow: hidden;
+  mask-image: linear-gradient(to right, transparent, black 8%, black 92%, transparent);
+}
+.marquee { animation: marquee 38s linear infinite; }
+.marquee-slow { animation-duration: 60s; }
+.marquee-pause:hover .marquee,
+.marquee-pause:focus-within .marquee { animation-play-state: paused; }
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+.process-bg {
+  background-color: #141210;
+  background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 22px);
+}
+.step-progress { width: 0; animation: step-progress linear forwards; }
+@keyframes step-progress {
+  from { width: 0; }
+  to { width: 100%; }
+}
+.code-in > div { animation: code-in 500ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+@keyframes code-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Outlined words with selection handles, like a text box picked in a design tool. */
+.outlined {
+  position: relative;
+  display: inline-block;
+  color: transparent;
+  -webkit-text-stroke: 1.25px var(--color-ink);
+  padding: 0 0.08em;
+}
+.outlined::before,
+.outlined::after {
+  content: "";
+  position: absolute;
+  top: 0.12em;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--color-ink);
+  background: var(--color-page);
+}
+.outlined::before { left: -4px; }
+.outlined::after { right: -4px; }
+
+.cap-icon { transition: transform 600ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.capability:hover .cap-icon { transform: translateY(-4px); }
+.capability:hover .cap-bar { animation: cap-bar 700ms cubic-bezier(0.2, 0.8, 0.2, 1) both; transform-box: fill-box; transform-origin: bottom; }
+@keyframes cap-bar {
+  from { transform: scaleY(0.2); }
+  to { transform: scaleY(1); }
+}
+.capability:hover .cap-line { stroke-dasharray: 100; animation: cap-line 800ms ease-out both; }
+@keyframes cap-line {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: 0; }
+}
+.capability:hover .cap-check { stroke-dasharray: 24; animation: cap-check 600ms ease-out both; }
+@keyframes cap-check {
+  from { stroke-dashoffset: 24; }
+  to { stroke-dashoffset: 0; }
+}
+.cap-spin { transform-origin: center; }
+.capability:hover .cap-spin { transform: rotate(60deg); }
+.cap-meridian { transform-box: fill-box; transform-origin: center; }
+.capability:hover .cap-meridian { animation: cap-meridian 2.4s linear infinite; }
+@keyframes cap-meridian {
+  0% { transform: scaleX(1); }
+  50% { transform: scaleX(0.05); }
+  100% { transform: scaleX(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .header-shell,
+  .reveal,
+  .cap-icon { transition: none; }
+  .reveal { opacity: 1; transform: none; }
+  .word-in,
+  .underline-in,
+  .marquee,
+  .code-in > div,
+  .step-progress,
+  .capability:hover .cap-bar,
+  .capability:hover .cap-line,
+  .capability:hover .cap-check,
+  .capability:hover .cap-meridian { animation: none; }
+  .marquee-mask { overflow-x: auto; }
 }
