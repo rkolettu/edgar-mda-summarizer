@@ -359,11 +359,11 @@ def research_snapshot(response: Response, ticker: str):
 
 
 @router.post("/research/{ticker}/insights")
-def research_insights(ticker: str):
+def research_insights(ticker: str, refresh: bool = False):
     """Writes the company's AI analysis if it is missing (model calls, once per filing) and returns the snapshot."""
     if not research_db.database_url():
         raise HTTPException(status_code=503, detail="The research store is not configured.")
-    return json_errors(research_service.generate_insights, ticker)
+    return json_errors(research_service.generate_insights, ticker, refresh)
 
 
 class ChatTurn(BaseModel):

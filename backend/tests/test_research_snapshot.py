@@ -237,7 +237,10 @@ def test_stale_snapshot_rechecks_edgar_and_survives_an_outage(research_conn, com
 
     research_conn.execute("UPDATE research_snapshots SET checked_at = now() - interval '2 days'")
     company_sec.routes[SUBMISSIONS_URL] = (500, "down")
-    assert service.get_snapshot("NVDA") == first
+    stale = service.get_snapshot("NVDA")
+    assert stale["research_status"]["cache_status"] == "stale"
+    assert stale["research_status"]["ai_status"] == first["research_status"]["ai_status"]
+    assert stale["financials"] == first["financials"]
 
 
 def test_storage_brake_refuses_new_companies_only(research_conn, company_sec, monkeypatch):
@@ -267,8 +270,10 @@ def test_snapshot_endpoint(research_conn, company_sec, fake_gemini):
 
 def test_outdated_snapshot_version_is_rebuilt(research_conn, company_sec, monkeypatch):
     service.get_snapshot("NVDA")
+    calls = len(company_sec.calls)
     monkeypatch.setattr(snapshot, "SNAPSHOT_VERSION", snapshot.SNAPSHOT_VERSION + 1)
     assert service.get_snapshot("NVDA")["snapshot_version"] == snapshot.SNAPSHOT_VERSION
+    assert len(company_sec.calls) == calls  # stored parsed facts are enough for a snapshot-only schema change
 
 
 def test_snapshot_is_json_serializable_and_compact(payload):
@@ -318,3 +323,17 @@ def test_risk_wording_compares_annual_reports_when_the_latest_filing_is_a_six_k(
     # A filing with its own risk factors is covered by its own changes.
     assert snapshot.risk_wording([], sections + [section(13, "risk_factors", BASE_RISK)], filings, filings[0],
                                  metrics.Metrics([]), "USD") is None
+
+
+def test_quarterly_no_material_risk_changes_uses_annual_fallback():
+    from research import metrics
+    from tests.test_research_changes import ADDED_RISK, BASE_RISK, FOREIGN, section
+    filings = [{**f, "source_url": None} for f in FOREIGN]
+    filings[0] = {**filings[0], "form_type": "10-Q"}
+    boilerplate = "There have been no material changes to the risk factors described in our annual report on Form 10-K."
+    sections = [section(11, "risk_factors", BASE_RISK), section(12, "risk_factors", f"{BASE_RISK} {ADDED_RISK}"),
+                section(13, "risk_factors", boilerplate)]
+    wording = snapshot.risk_wording([], sections, filings, filings[0], metrics.Metrics([]), "USD")
+    assert wording["status"] == "no_material_changes"
+    assert "No material changes" in wording["note"]
+    assert [i["text"] for i in wording["items"]] == [ADDED_RISK]

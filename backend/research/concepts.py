@@ -178,7 +178,9 @@ REPORTED_LABEL_METRICS = {
     "net income": "net_income", "cash and cash equivalents": "cash", "total assets": "total_assets",
     "inventories": "inventory", "inventory": "inventory", "accounts receivable, net": "accounts_receivable",
     "accounts payable": "accounts_payable", "total liabilities": "total_liabilities",
-    "capital expenditures": "capex", "purchases of property and equipment": "capex", "capital expenditure": "capex",
+    "capital expenditures": "capex", "purchases of property and equipment": "capex", "purchase of property and equipment": "capex",
+    "purchases of property, plant and equipment": "capex", "purchases related to property and equipment": "capex",
+    "capital expenditure": "capex",
     "net expenditures on property, plant and equipment": "capex", "cash capital expenditure": "capex",
     "income before income taxes": "pretax_income", "income before taxes": "pretax_income", "profit before tax": "pretax_income",
     "earnings before income taxes": "pretax_income", "income before tax and equity method investments": "pretax_income",
@@ -193,7 +195,12 @@ REPORTED_LABEL_METRICS = {
 
 
 def label_key(label: str | None) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"\(\w\)|[:*]", "", label or "")).strip().lower()
+    """Normalize statement labels while preserving meaningful words.
+
+    Statement rows commonly append note references such as ``(12)`` or a trailing colon/asterisk; these must not
+    prevent a standard financial line from matching merely because the filer uses a custom XBRL concept.
+    """
+    return re.sub(r"\s+", " ", re.sub(r"\([^)]{1,8}\)|[:*]+", "", label or "")).strip(" .").lower()
 
 
 def metric_concepts(metric: Metric, standard: str) -> list[str]:

@@ -1,5 +1,5 @@
 import { Analytics } from '@vercel/analytics/react'
-import { ArrowLeft, ExternalLink, Info, TriangleAlert } from 'lucide-react'
+import { ArrowLeft, ExternalLink, Info, RefreshCw, Sparkles, TriangleAlert } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import AnalysisSection from './components/AnalysisSection'
 import BusinessTab from './components/BusinessTab'
@@ -135,6 +135,35 @@ function FailureAlert({ query, message }) {
         <div className="font-medium text-ink">Analysis failed for “{query}”</div>
         <div className="mt-0.5 text-ink-2">{message}</div>
       </div>
+    </div>
+  )
+}
+
+function AnalysisStatus({ research, request, onGenerate }) {
+  const meta = research.research_status
+  if (!meta) return null
+  if (meta.ai_status === 'complete') return (
+    <div className="mb-4 flex justify-end">
+      <button type="button" onClick={() => onGenerate(true)} disabled={request.status === 'loading'}
+        className="inline-flex items-center gap-1.5 text-xs font-medium text-muted hover:text-accent disabled:opacity-60">
+        <RefreshCw size={12} aria-hidden /> Refresh analysis
+      </button>
+    </div>
+  )
+  const failed = meta.ai_status === 'failed' || request.status === 'error'
+  return (
+    <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-l-2 border-accent bg-panel-2 px-4 py-3 text-sm">
+      <div>
+        <p className="font-medium text-ink">Filing data loaded. AI analysis was not generated.</p>
+        {request.status === 'error' && <p className="mt-0.5 text-xs text-muted">{request.error}</p>}
+      </div>
+      {research.insights?.configured && (
+        <button type="button" onClick={() => onGenerate(false)} disabled={request.status === 'loading'}
+          className="inline-flex items-center gap-1.5 rounded bg-accent px-3 py-2 text-xs font-semibold text-white hover:bg-accent-hover disabled:opacity-60">
+          {failed ? <RefreshCw size={13} aria-hidden /> : <Sparkles size={13} aria-hidden />}
+          {failed ? 'Retry AI analysis' : 'Generate AI analysis'}
+        </button>
+      )}
     </div>
   )
 }
@@ -286,12 +315,17 @@ export default function App() {
     setQuery(ticker)
     if (ticker !== q) window.history.replaceState({}, '', `?c=${encodeURIComponent(ticker)}`)
 
-    // The AI analysis is written once per filing and then stored; ask for it only when it is missing.
-    // The omission check runs after the summary; a summary without it (a spent quota) asks again.
-    if ((data.insights?.status === 'ready' && data.insights?.audit) || !data.insights?.configured) return
+  }
+
+  async function generateInsights(force = false) {
+    if (!research.data || insightsRequest.status === 'loading') return
+    const request = latestRequest.current
+    const current = () => request === latestRequest.current
+    const ticker = research.data.company.ticker
     setInsightsRequest({ status: 'loading' })
     try {
-      const updated = await postJson(`/api/research/${encodeURIComponent(ticker)}/insights`)
+      const suffix = force ? '?refresh=true' : ''
+      const updated = await postJson(`/api/research/${encodeURIComponent(ticker)}/insights${suffix}`)
       if (!current()) return
       setResearch({ status: 'ready', data: updated })
       setInsightsRequest({ status: 'done' })
@@ -345,6 +379,7 @@ export default function App() {
             {researchReady ? (
               <>
                 <Tabs tabs={TABS} active={tab} onChange={setTab} />
+                <AnalysisStatus research={research.data} request={insightsRequest} onGenerate={generateInsights} />
                 <TabPanel tabKey="overview" active={tab}><OverviewTab {...tabProps} onNavigate={setTab} /></TabPanel>
                 <TabPanel tabKey="financials" active={tab}><FinancialsTab research={research.data} /></TabPanel>
                 <TabPanel tabKey="business" active={tab}><BusinessTab {...tabProps} /></TabPanel>

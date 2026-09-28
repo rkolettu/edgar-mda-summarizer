@@ -47,13 +47,21 @@ def _is_current(stored: dict | None) -> bool:
     )
 
 
-def _served(payload: dict) -> dict:
+def _served(payload: dict, cache_status: str = "current") -> dict:
     """Whether this server can write the AI analysis depends on where it runs (the daily job and the web app have
     their own keys), so it is set when the snapshot is served, not when it is built."""
     insights = payload.get("insights")
     if insights is not None:
         insights["configured"] = llm.configured()
     payload["chat"] = {"configured": llm.chat_configured()}
+    payload.setdefault("research_status", {})["cache_status"] = cache_status
+    return payload
+
+
+def _with_live_status(conn, company_id: int, payload: dict) -> dict:
+    """Analysis runs change independently of snapshots, so refresh this small status block on every cache hit."""
+    payload["research_status"] = interpret.analysis_status(
+        conn, company_id, store.company_filings(conn, company_id), payload.get("insights", {}))
     return payload
 
 
@@ -61,9 +69,15 @@ def get_snapshot(query: str) -> dict:
     with db.connect() as conn:
         company, _ = _resolve(conn, query)
         stored = store.load_snapshot(conn, company["company_id"]) if company else None
+        # A presentation/status schema change can be rebuilt entirely from stored parsed facts. Do not turn it into
+        # an SEC refresh merely because the snapshot JSON is older.
+        if (stored is not None and stored["parser_version"] == extract.PARSER_VERSION
+                and stored["snapshot_version"] != snapshot.SNAPSHOT_VERSION):
+            snapshot.rebuild(conn, company["company_id"])
+            stored = store.load_snapshot(conn, company["company_id"])
         if _is_current(stored):
             store.touch_company(conn, company["company_id"])
-            return _served(stored["payload"])
+            return _served(_with_live_status(conn, company["company_id"], stored["payload"]))
 
         if company is None:
             if store.storage_bytes(conn) > STORAGE_BRAKE_BYTES:
@@ -74,7 +88,7 @@ def get_snapshot(query: str) -> dict:
             result = _ingest_waiting_for_others(conn, query)
         except HTTPException:
             if stored is not None:
-                return _served(stored["payload"])  # SEC unavailable: serve what we have
+                return _served(_with_live_status(conn, company["company_id"], stored["payload"]), "stale")
             raise
         if not result["filings"]:
             raise HTTPException(status_code=422, detail="No supported annual or quarterly filings were found for this company.")
@@ -94,7 +108,7 @@ def _ingest_waiting_for_others(conn, query: str) -> dict:
     return result
 
 
-def generate_insights(query: str) -> dict:
+def generate_insights(query: str, force: bool = False) -> dict:
     """Runs the model stages the company is missing and returns its snapshot with the AI analysis merged in."""
     if not llm.configured():
         raise HTTPException(status_code=503, detail="AI analysis is not configured on this server.")
@@ -108,16 +122,20 @@ def generate_insights(query: str) -> dict:
         deadline = time.monotonic() + INSIGHTS_WAIT_SECONDS
         while True:
             try:
-                interpret.run(conn, company_id)
+                interpret.run(conn, company_id, force=force)
                 break
             except interpret.Busy as exc:
                 if time.monotonic() > deadline:
                     raise HTTPException(status_code=503, detail="The AI analysis is still being written; try again in a minute.") from exc
                 time.sleep(BUSY_WAIT_SECONDS)
             except llm.ModelUnavailable as exc:
+                snapshot.rebuild(conn, company_id)  # persist failed status while retaining deterministic data
                 if exc.quota:
                     raise HTTPException(status_code=429, detail=QUOTA_MESSAGE) from exc
-                raise HTTPException(status_code=503, detail=f"The AI analysis is unavailable ({exc}).") from exc
+                raise HTTPException(status_code=503, detail="The AI analysis is unavailable right now; try again later.") from exc
+            except Exception as exc:
+                snapshot.rebuild(conn, company_id)
+                raise HTTPException(status_code=503, detail="The AI analysis could not be completed; try again later.") from exc
         stored = store.load_snapshot(conn, company_id)
         if stored is None or stored["snapshot_version"] != snapshot.SNAPSHOT_VERSION:
             return _served(snapshot.rebuild(conn, company_id))

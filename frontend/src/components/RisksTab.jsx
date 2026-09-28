@@ -111,10 +111,15 @@ export default function RisksTab({ research, request }) {
         written by AI from those changes and quoted risk factor text, and state whether a risk has already happened or could happen.
       </SectionHeader>
       <InsightsNotice insights={insights} request={request} />
+      {annualWording?.status === 'no_material_changes' && (
+        <Card title="Quarterly risk-factor update" className="mb-5">
+          <p className="px-5 py-4 text-sm text-ink-2 sm:px-6">No material changes to risk factors reported this quarter.</p>
+        </Card>
+      )}
       <Ranked risks={ranked} />
       <WordingChanges changes={changes} annual={annualWording} />
       {others.length > 0 && (
-        <Card title="Other company-specific risks in the filings">
+        <Card title={annualWording?.status === 'no_material_changes' ? 'Annual risk factors still applicable' : 'Other company-specific risks in the filings'}>
           <QuotedList items={others} empty="" badges={(item) => <RiskBadges trend={item.trend} extracted={item} />} />
         </Card>
       )}

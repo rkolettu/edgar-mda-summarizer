@@ -32,6 +32,39 @@ EXTRACT_VERSION = 1
 SYNTH_VERSION = 1
 AUDIT_VERSION = 1
 
+
+def pipeline_versions() -> dict[str, int]:
+    """Public version metadata used to invalidate AI output without invalidating parsed filing data."""
+    return {"extract": EXTRACT_VERSION, "synthesize": SYNTH_VERSION, "audit": AUDIT_VERSION}
+
+
+def analysis_status(conn: psycopg.Connection, company_id: int, filings: list[dict], insights: dict) -> dict:
+    """Completeness of the independently cached AI pipeline for the filing set shown by a snapshot."""
+    chosen = targets(filings)
+    outputs = stored_outputs(conn, company_id)
+    latest = chosen[0] if chosen else None
+    complete = bool(latest and (latest["filing_id"], "synthesize") in outputs
+                    and (latest["filing_id"], "audit") in outputs)
+    run = store.latest_analysis_run(conn, company_id, pipeline_versions())
+    if complete:
+        status = "complete"
+    elif run and run["status"] == "running":
+        status = "pending"
+    elif run and run["status"] == "failed":
+        status = "failed"
+    else:
+        status = "missing"
+    synthesis = outputs.get((latest["filing_id"], "synthesize")) if latest else None
+    generated = synthesis["created_at"] if synthesis else None
+    return {
+        "parse_status": "complete",
+        "ai_status": status,
+        "status": "complete" if complete else "partial",
+        "ai_generated_at": generated.isoformat(timespec="seconds") if generated else None,
+        "ai_models": insights.get("models", []),
+        "ai_versions": pipeline_versions(),
+    }
+
 LIMITS = {
     "business": 30_000,
     "management_discussion_annual": 45_000,

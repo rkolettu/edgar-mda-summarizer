@@ -3,6 +3,7 @@ import { formatPct, formatSignedPct, formatUnit, periodLabel } from '../lib/form
 import { Delta, Tile } from './KpiStrip'
 import { MarginChart, RevenueCashChart } from './FinancialsTab'
 import { AiLabel, Badge, Card, InsightsNotice, SectionHeader, SynthPoint } from './Insights'
+import { formatChange } from '../lib/changeFormatting'
 
 function latest(table, key) {
   const row = table?.rows?.find((r) => r.key === key)
@@ -134,7 +135,7 @@ function OmissionCheck({ audit }) {
 function changeLine(item) {
   if (item.kind === 'narrative') return item.category_label
   if (item.change === null || item.change === undefined) return `${item.change_type === 'new' ? 'New' : 'Changed'} · ${item.category_label}`
-  const moved = item.unit === 'currency' ? formatSignedPct(item.change) : `${item.change > 0 ? '+' : ''}${(item.change * 100).toFixed(1)} pts`
+  const moved = formatChange(item.change, item.unit, formatSignedPct)
   return `${moved} · ${item.category_label}`
 }
 

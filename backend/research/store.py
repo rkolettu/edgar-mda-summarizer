@@ -587,3 +587,19 @@ def recent_quota_failure(conn: psycopg.Connection, company_id: int, minutes: int
         """,
         (company_id, "%quota%", minutes),
     ).fetchone()[0]
+
+
+def latest_analysis_run(conn: psycopg.Connection, company_id: int, versions: dict[str, int]) -> dict | None:
+    """Latest current-version AI attempt for a company's filings, without exposing its provider error."""
+    with conn.cursor(row_factory=dict_row) as cur:
+        return cur.execute(
+            """
+            SELECT r.stage, r.status, r.started_at, r.finished_at
+            FROM analysis_runs r JOIN filings f ON f.accession_number = r.accession_number
+            WHERE f.company_id = %s AND r.stage = ANY(%s)
+              AND r.pipeline_version = CASE r.stage
+                    WHEN 'extract' THEN %s WHEN 'synthesize' THEN %s WHEN 'audit' THEN %s END
+            ORDER BY r.run_id DESC LIMIT 1
+            """,
+            (company_id, list(versions), versions["extract"], versions["synthesize"], versions["audit"]),
+        ).fetchone()

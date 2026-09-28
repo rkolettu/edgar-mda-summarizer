@@ -2,6 +2,7 @@ import { ArrowDownRight, ArrowUpRight, MoveHorizontal } from 'lucide-react'
 import { formatPct, formatUnit } from '../lib/format'
 import { AiLabel, Badge, Card, InsightsNotice, QuotedList, SectionHeader } from './Insights'
 import { FigureText } from './Verification'
+import { usefulBreakdowns } from '../lib/business'
 
 const DIRECTION = {
   up: { label: 'Up', icon: ArrowUpRight },
@@ -10,24 +11,23 @@ const DIRECTION = {
 }
 
 // Segment revenue from the filings' tags, next to how the filing describes each segment.
-function SegmentRevenue({ breakdowns, currency }) {
-  const segments = breakdowns?.find((b) => b.family === 'segment')
-  const view = segments?.annual ?? segments?.quarterly
-  const items = (view?.items ?? []).filter((i) => i.metric === 'revenue')
-  if (!items.length) return null
+function RevenueBreakdowns({ breakdowns, currency }) {
+  const groups = usefulBreakdowns(breakdowns)
+  if (!groups.length) return null
   return (
-    <div className="border-b border-line px-5 py-4 sm:px-6">
-      <p className="mb-2 text-[11px] font-semibold tracking-[0.08em] text-muted uppercase">Segment revenue · {view.label}</p>
-      <ul className="flex flex-wrap gap-x-6 gap-y-2">
-        {items.map((i) => (
-          <li key={i.key} className="text-sm">
-            <span className="text-ink">{i.label}</span>{' '}
-            <span className="font-mono text-ink-2 tabular-nums">{formatUnit(i.value, 'currency', currency)}</span>
+    <>{groups.map((group) => {
+      const views = [group.quarterly, group.annual].filter(Boolean)
+      return views.map((view) => {
+        const items = view.items.filter((i) => i.metric === 'revenue')
+        return <div key={`${group.family}-${view.label}`} className="border-b border-line px-5 py-4 sm:px-6">
+          <p className="mb-2 text-[11px] font-semibold tracking-[0.08em] text-muted uppercase">{group.label} revenue · {view.label}</p>
+          <ul className="flex flex-wrap gap-x-6 gap-y-2">{items.map((i) => <li key={i.key} className="text-sm">
+            <span className="text-ink">{i.label}</span>{' '}<span className="font-mono text-ink-2 tabular-nums">{formatUnit(i.value, 'currency', currency)}</span>
             {i.share_of_revenue != null && <span className="text-xs text-muted"> · {formatPct(i.share_of_revenue, 0)} of revenue</span>}
-          </li>
-        ))}
-      </ul>
-    </div>
+          </li>)}</ul>
+        </div>
+      })
+    })}</>
   )
 }
 
@@ -44,7 +44,7 @@ export default function BusinessTab({ research, request }) {
       </SectionHeader>
       <InsightsNotice insights={insights} request={request} />
       {!ready ? (
-        <Card title="Segments"><SegmentRevenue breakdowns={financials.breakdowns} currency={financials.currency} /></Card>
+        <Card title="Business mix"><RevenueBreakdowns breakdowns={financials.breakdowns} currency={financials.currency} /></Card>
       ) : (
         <div className="space-y-5">
           {(business.overview?.text || business.summary) && (
@@ -55,8 +55,8 @@ export default function BusinessTab({ research, request }) {
               </div>
             </Card>
           )}
-          <Card title="Segments and products">
-            <SegmentRevenue breakdowns={financials.breakdowns} currency={financials.currency} />
+          <Card title="Products, geographies and segments">
+            <RevenueBreakdowns breakdowns={financials.breakdowns} currency={financials.currency} />
             <QuotedList items={business.segments} empty="The filing's business description was not available to read." />
           </Card>
           <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">

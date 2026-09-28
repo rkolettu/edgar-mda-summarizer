@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
-from research import ingest, interpret, llm, store
+from research import ingest, interpret, llm, service, snapshot, store
 from tests.test_research_ingest import nvda_sec  # noqa: F401 - fixture
 
 QUARTER_QUOTE = ("Total net sales increased 11% to $138.4 billion during the first quarter of 2026 compared to the same "
@@ -169,6 +169,30 @@ def test_insights_endpoint(research_conn, company, model):
     assert res.status_code == 200 and res.json()["insights"]["status"] == "ready"
 
 
+def test_cached_parsed_result_exposes_missing_ai_without_calling_model(research_conn, company, model, monkeypatch):
+    monkeypatch.setattr(ingest, "ingest_company", lambda *a: pytest.fail("current parsed cache must not re-ingest SEC data"))
+    payload = service.get_snapshot("NVDA")
+    assert payload["research_status"] == {
+        "parse_status": "complete", "ai_status": "missing", "status": "partial", "ai_generated_at": None,
+        "ai_models": [], "ai_versions": interpret.pipeline_versions(), "cache_status": "current",
+    }
+    assert model.calls == [] and payload["financials"]["annual"]["rows"]
+
+
+def test_ai_only_retry_completes_existing_snapshot_without_sec_ingest(research_conn, company, model, monkeypatch):
+    monkeypatch.setattr(ingest, "ingest_company", lambda *a: pytest.fail("AI retry must use stored filing data"))
+    before = research_conn.execute("SELECT count(*) FROM facts WHERE company_id = %s", (company["company_id"],)).fetchone()[0]
+    updated = service.generate_insights("NVDA")
+    after = research_conn.execute("SELECT count(*) FROM facts WHERE company_id = %s", (company["company_id"],)).fetchone()[0]
+    assert before == after
+    assert updated["research_status"]["ai_status"] == "complete"
+    assert updated["research_status"]["status"] == "complete"
+    assert updated["research_status"]["ai_generated_at"]
+    calls = len(model.calls)
+    assert service.get_snapshot("NVDA")["research_status"]["ai_status"] == "complete"
+    assert len(model.calls) == calls
+
+
 def test_insights_endpoint_backs_off_after_a_spent_quota(research_conn, company, model, monkeypatch):
     monkeypatch.setattr(llm, "_gemini", lambda *a: (_ for _ in ()).throw(ProviderError(429, "quota exceeded")))
     client = TestClient(main.app)
@@ -179,6 +203,41 @@ def test_insights_endpoint_backs_off_after_a_spent_quota(research_conn, company,
     assert len(model.calls) == calls
     payload = client.get("/api/research/NVDA").json()
     assert payload["insights"]["status"] == "pending" and payload["financials"]["annual"]["rows"]
+    assert payload["research_status"]["ai_status"] == "failed"
+    assert payload["research_status"]["status"] == "partial"
+
+
+def test_failed_ai_can_retry_and_does_not_poison_parsed_cache(research_conn, company, model, monkeypatch):
+    real = llm._gemini
+    monkeypatch.setattr(llm, "_gemini", lambda *a: (_ for _ in ()).throw(ProviderError(503, "provider detail")))
+    with pytest.raises(Exception):
+        service.generate_insights("NVDA")
+    partial = service.get_snapshot("NVDA")
+    assert partial["research_status"]["ai_status"] == "failed"
+    assert partial["research_status"]["parse_status"] == "complete"
+    assert "provider detail" not in str(partial)
+    monkeypatch.setattr(llm, "_gemini", real)
+    assert service.generate_insights("NVDA")["research_status"]["ai_status"] == "complete"
+
+
+def test_current_ai_version_mismatch_is_partial_and_regenerates_ai_only(research_conn, company, model, monkeypatch):
+    interpret.run(research_conn, company["company_id"])
+    monkeypatch.setattr(interpret, "SYNTH_VERSION", interpret.SYNTH_VERSION + 1)
+    snapshot.rebuild(research_conn, company["company_id"])
+    partial = service.get_snapshot("NVDA")
+    assert partial["research_status"]["ai_status"] == "missing"
+    assert partial["research_status"]["status"] == "partial"
+    monkeypatch.setattr(ingest, "ingest_company", lambda *a: pytest.fail("version mismatch must not reparse SEC data"))
+    assert service.generate_insights("NVDA")["research_status"]["ai_status"] == "complete"
+
+
+def test_running_ai_stage_is_pending_and_a_second_worker_cannot_claim_it(research_conn, company, model):
+    latest = store.company_filings(research_conn, company["company_id"])[0]
+    run_id = store.claim_stage(research_conn, latest["accession_number"], "synthesize", interpret.SYNTH_VERSION)
+    assert run_id is not None
+    assert store.claim_stage(research_conn, latest["accession_number"], "synthesize", interpret.SYNTH_VERSION) is None
+    assert service.get_snapshot("NVDA")["research_status"]["ai_status"] == "pending"
+    store.finish_stage(research_conn, run_id, "failed", filing_id=latest["filing_id"], error="test failure")
 
 
 def test_insights_endpoint_without_a_model_key(research_conn, company, monkeypatch):
