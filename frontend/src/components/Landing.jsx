@@ -200,7 +200,7 @@ const SHOWCASE = [
 // The product cards side by side under the hero, each with a caption.
 function Showcase() {
   return (
-    <section aria-labelledby="showcase-heading" className="mx-auto max-w-6xl px-5 pb-6 sm:px-8">
+    <section aria-labelledby="showcase-heading" className="mx-auto max-w-6xl px-5 pb-16 sm:px-8 sm:pb-24">
       <p id="showcase-heading" className={`mb-5 ${LABEL} text-muted`}>Inside a company page</p>
       <div className="grid gap-4 md:grid-cols-3">
         {SHOWCASE.map(({ card: Card, title, body }, i) => (
@@ -253,35 +253,37 @@ function TrendSvg({ className = 'h-32 w-full' }) {
   )
 }
 
+// A slim strip of companies to try, right under the site header.
 function CompanyMarquee({ onPick }) {
   const row = (hidden) => (
-    <ul className="flex shrink-0 gap-3 pr-3" aria-hidden={hidden || undefined}>
+    <ul className="flex shrink-0 gap-2 pr-2" aria-hidden={hidden || undefined}>
       {COMPANIES.map((c) => (
         <li key={c.ticker} className="shrink-0">
           <button
             type="button"
             tabIndex={hidden ? -1 : undefined}
             onClick={() => onPick(c.ticker)}
-            className="group flex items-center gap-3 rounded-xl border border-line bg-panel px-4 py-3 transition-colors hover:border-ink"
+            className="group flex items-center gap-2 rounded-lg border border-line bg-panel px-3 py-1.5 transition-colors hover:border-ink"
           >
-            <span className="font-mono text-xs font-medium text-ink">{c.ticker}</span>
-            <span className="text-sm text-ink-2">{c.name}</span>
-            <ArrowUpRight size={14} className="text-muted transition-colors group-hover:text-ink" aria-hidden />
+            <span className="font-mono text-[11px] font-medium text-ink">{c.ticker}</span>
+            <span className="text-[13px] text-ink-2">{c.name}</span>
+            <ArrowUpRight size={12} className="text-muted transition-colors group-hover:text-ink" aria-hidden />
           </button>
         </li>
       ))}
     </ul>
   )
   return (
-    <section aria-label="Try a company" className="py-14 sm:py-16">
-      <div className="mx-auto mb-5 flex max-w-6xl items-baseline justify-between gap-4 px-5 sm:px-8">
-        <p className={`${LABEL} text-muted`}>Try a company</p>
-        <p className="hidden text-xs text-muted sm:block">Showcase companies load instantly. Others take about a minute the first time.</p>
-      </div>
-      <div className="marquee-mask marquee-pause">
-        <div className="marquee flex w-max">
-          {row(false)}
-          {row(true)}
+    <section aria-label="Try a company" className="border-b border-line/70">
+      <div className="mx-auto flex max-w-6xl items-center gap-4 px-5 py-3 sm:gap-6 sm:px-8">
+        <p className={`shrink-0 ${LABEL} text-muted`} title="Showcase companies load instantly. Others take about a minute the first time.">
+          Try a company
+        </p>
+        <div className="marquee-mask marquee-pause min-w-0 flex-1">
+          <div className="marquee flex w-max">
+            {row(false)}
+            {row(true)}
+          </div>
         </div>
       </div>
     </section>
@@ -445,9 +447,9 @@ function ClosingCta({ onPick, onSearch }) {
 export default function Landing({ onPick, onSearch }) {
   return (
     <div className="landing">
+      <CompanyMarquee onPick={onPick} />
       <Hero onPick={onPick} onSearch={onSearch} />
       <Showcase />
-      <CompanyMarquee onPick={onPick} />
       <Process />
       <AboutProject />
       <ClosingCta onPick={onPick} onSearch={onSearch} />
