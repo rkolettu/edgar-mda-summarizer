@@ -88,3 +88,11 @@ def test_tidy_removes_emphasis_and_joins_spaced_units():
     assert chat.tidy("- Commitments total **$366.0 B** [F]; guarantees **$860.0 M**.") == \
         "- Commitments total $366.0B [F]; guarantees $860.0M."
     assert chat.tidy("It raised $25.0 Billion and $3 million.") == "It raised $25.0 Billion and $3 million."
+
+
+def test_tidy_turns_every_citation_style_into_plain_brackets():
+    """gpt-oss sometimes cites as 【S1】 (TSMC's answer), which the page did not link."""
+    assert chat.tidy("It depends on future taxable income【S1】 and its ERM framework【S2†L4-L9】.") == \
+        "It depends on future taxable income[S1] and its ERM framework[S2]."
+    assert chat.tidy("Both notes say so [S1, S3]; figures too ［F］.") == "Both notes say so [S1][S3]; figures too [F]."
+    assert chat.tidy("Ordinary [S2] stays.") == "Ordinary [S2] stays."

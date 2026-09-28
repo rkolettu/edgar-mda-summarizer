@@ -58,9 +58,12 @@ class InvalidQuestion(ValueError):
 # Models add markdown emphasis despite the prompt, and write "$25.0 B", which the figure check reads as $25.0.
 EMPHASIS = re.compile(r"\*\*|__")
 SPACED_UNIT = re.compile(r"(\$\d[\d,]*(?:\.\d+)?) ([KMBT])\b")
+# gpt-oss cites in its own house style ("【S1】", "【S1†L3-L5】", "[S1, S2]"); the page links only "[S1]".
+CITATION = re.compile(r"[【〔［\[]\s*((?:S\d+|F)(?:\s*[,;]\s*(?:S\d+|F))*)(?:\s*†[^】〕］\]]*)?\s*[】〕］\]]")
 
 
 def tidy(text: str) -> str:
+    text = CITATION.sub(lambda m: "".join(f"[{c.strip()}]" for c in re.split(r"[,;]", m.group(1))), text)
     return SPACED_UNIT.sub(r"\1\2", EMPHASIS.sub("", text)).strip()
 
 
