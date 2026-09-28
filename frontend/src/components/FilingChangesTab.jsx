@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { TypeTag } from './ChangesSection'
 import { FigureText } from './Verification'
 import { formatSignedPct, formatUnit } from '../lib/format'
+import { formatChange } from '../lib/changeFormatting'
 
 const FILTERS = [
   { key: 'all', label: 'All' },
@@ -39,10 +40,8 @@ function value(amount, unit, currency) {
 // Neutral wording: a rise in commitments or debt is not good or bad by itself. Above tenfold, a multiple reads better.
 function changeText(item) {
   const { change, unit } = item
-  if (unit === 'ratio' || unit === 'points') return change === null ? null : `${change > 0 ? '+' : ''}${(change * 100).toFixed(1)} pts`
-  if (unit === 'days') return change === null ? null : `${change > 0 ? '+' : ''}${Math.round(change)} days`
   if (change === null) return item.base_value === 0 && item.value ? 'from zero' : null
-  return change >= 9 ? `${(1 + change).toFixed(0)}×` : formatSignedPct(change)
+  return formatChange(change, unit, formatSignedPct)
 }
 
 function comparisonLabel(item) {

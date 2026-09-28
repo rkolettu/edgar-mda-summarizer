@@ -67,7 +67,7 @@ def test_column_values_compute_margins_growth_cash_flow_and_debt():
     assert v["free_cash_flow"].value == 97 and v["fcf_margin"].value == pytest.approx(97 / 216)
     assert v["cash_conversion"].value == pytest.approx(103 / 120)
     assert v["total_debt"].value == pytest.approx(9.5)
-    assert v["net_cash"].value == pytest.approx(60 - 9.5)
+    assert v["net_cash"].value == pytest.approx(10 - 9.5)
     assert v["receivable_days"].value == pytest.approx(38 / 216 * 365)
     assert v["inventory_days"].value == pytest.approx(21 / 62 * 365)
 
@@ -78,6 +78,32 @@ def test_total_debt_without_a_long_term_total_uses_noncurrent_plus_current_only(
     m = metrics.Metrics(rows)
     # DebtCurrent may already include commercial paper, so it is not added again.
     assert metrics.column_values(m, 2026, "FY", "annual")["total_debt"].value == 33.0
+
+
+def test_net_debt_uses_same_period_components_and_latest_complete_column():
+    rows = []
+    for fy, period, cash, current, noncurrent in (
+        (2025, "FY", 7.0, 5.0, 40.0),
+        (2026, "Q1", 8.0, 6.0, 42.0),
+        (2026, "Q2", 8.95, 7.05, 47.86),
+    ):
+        end = date(fy, {"FY": 12, "Q1": 3, "Q2": 6}[period], 28)
+        rows += [fact(k, fy, period, v, instant=True, end=end) for k, v in
+                 (("cash", cash), ("debt_current", current), ("long_term_debt_noncurrent", noncurrent))]
+    # A later cash-only balance must not be combined with Q2 debt.
+    rows.append(fact("cash", 2026, "Q3", 20.0, instant=True, end=date(2026, 9, 28)))
+    m = metrics.Metrics(rows + spans("revenue", 2026, Q1=1, Q2=1, Q3=1))
+    table = metrics.table(m, "quarterly")
+    net = next(r for r in table["rows"] if r["key"] == "net_cash")
+    assert net["values"][-1] is None
+    assert net["values"][-2]["v"] == pytest.approx(8.95 - 7.05 - 47.86)
+    assert next(r for r in table["rows"] if r["key"] == "total_debt")["values"][-2]["v"] == pytest.approx(54.91)
+
+
+@pytest.mark.parametrize("capex", [5.259, -5.259])
+def test_free_cash_flow_deducts_the_absolute_capex_outflow(capex):
+    m = metrics.Metrics(spans("operating_cash_flow", 2026, H1=16.023) + spans("capex", 2026, H1=capex))
+    assert metrics.column_values(m, 2026, "H1", "quarterly")["free_cash_flow"].value == pytest.approx(10.764)
 
 
 def test_tables_keep_recent_columns_and_drop_empty_rows():
@@ -98,14 +124,14 @@ def test_earnings_bridge_shows_non_operating_share():
     assert bridge["non_operating"] == 7.8 and bridge["non_operating_share_of_pretax"] == pytest.approx(7.8 / 71.5)
 
 
-def test_net_cash_is_left_blank_when_a_reported_component_is_missing():
+def test_net_cash_requires_cash_and_debt_in_the_same_period():
     rows = [fact(k, fy, "FY", v, instant=True, start=None, end=date(fy, 12, 31))
             for fy, k, v in ((2025, "cash", 8.6), (2025, "marketable_securities", 34.6), (2025, "long_term_debt", 8.5),
                              (2026, "cash", 22.4), (2026, "long_term_debt", 33.4))]
     m = metrics.Metrics(rows)
-    assert metrics.column_values(m, 2025, "FY", "annual")["net_cash"].value == pytest.approx(34.7)
-    # 2026 lacks marketable securities the company reported before: no misleading net debt.
-    assert metrics.column_values(m, 2026, "FY", "annual")["net_cash"] is None
+    assert metrics.column_values(m, 2025, "FY", "annual")["net_cash"].value == pytest.approx(0.1)
+    # Marketable securities are not silently carried into or mixed with the cash-and-debt calculation.
+    assert metrics.column_values(m, 2026, "FY", "annual")["net_cash"].value == pytest.approx(-11.0)
 
 
 def test_bank_profile_and_its_ratios():

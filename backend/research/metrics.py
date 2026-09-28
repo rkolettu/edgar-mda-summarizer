@@ -273,14 +273,18 @@ def column_values(m: Metrics, fiscal_year: int, period: str, kind: str) -> dict[
     gross = get("gross_profit") or _diff(revenue, cost)
     capex = get("capex")
     ocf = get("operating_cash_flow")
-    fcf = _diff(ocf, capex) if ocf and capex else None
-    # LongTermDebt includes current maturities but not commercial paper; a DebtCurrent fallback may already include
-    # commercial paper, so it is added only to the LongTermDebt total.
-    if get("long_term_debt") is not None:
+    # Filers differ on whether investing cash outflows are tagged as positive payments or negative cash flows.
+    # FCF always deducts the cash spent rather than adding a negative tagged value.
+    fcf = Value(ocf.value - abs(capex.value), derived=True) if ocf and capex else None
+    # Prefer the separately reported current and noncurrent components.  LongTermDebt is an aggregate including
+    # current maturities, so use it only when the components are unavailable and add commercial paper only then.
+    current, noncurrent = get("debt_current"), get("long_term_debt_noncurrent")
+    if current is not None and noncurrent is not None:
+        total_debt = _sum(current, noncurrent)
+    elif get("long_term_debt") is not None:
         total_debt = _sum(get("long_term_debt"), get("commercial_paper"))
     else:
-        total_debt = _sum(get("long_term_debt_noncurrent"), get("debt_current"))
-    cash_like = _sum(get("cash"), get("marketable_securities"))
+        total_debt = _sum(noncurrent, current)
     return {
         "revenue": revenue,
         "revenue_growth": _growth(revenue, get("revenue", fiscal_year - 1)),
@@ -308,10 +312,9 @@ def column_values(m: Metrics, fiscal_year: int, period: str, kind: str) -> dict[
         "cash": get("cash"),
         "marketable_securities": get("marketable_securities"),
         "total_debt": total_debt,
-        # A company that reports marketable securities in other periods but not this one would look indebted.
-        "net_cash": _diff(cash_like, total_debt)
-        if cash_like and total_debt and (get("marketable_securities") or not m.values.get("marketable_securities"))
-        else None,
+        # Both operands are fetched from this exact fiscal column; a missing component leaves the value blank rather
+        # than silently carrying cash or debt from another balance-sheet date.
+        "net_cash": _diff(get("cash"), total_debt),
         "accounts_receivable": get("accounts_receivable"),
         "receivable_days": _days(get("accounts_receivable"), revenue, days),
         "inventory": get("inventory"),
