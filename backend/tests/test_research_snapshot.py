@@ -318,3 +318,17 @@ def test_risk_wording_compares_annual_reports_when_the_latest_filing_is_a_six_k(
     # A filing with its own risk factors is covered by its own changes.
     assert snapshot.risk_wording([], sections + [section(13, "risk_factors", BASE_RISK)], filings, filings[0],
                                  metrics.Metrics([]), "USD") is None
+
+
+def test_quarterly_no_material_risk_changes_uses_annual_fallback():
+    from research import metrics
+    from tests.test_research_changes import ADDED_RISK, BASE_RISK, FOREIGN, section
+    filings = [{**f, "source_url": None} for f in FOREIGN]
+    filings[0] = {**filings[0], "form_type": "10-Q"}
+    boilerplate = "There have been no material changes to the risk factors described in our annual report on Form 10-K."
+    sections = [section(11, "risk_factors", BASE_RISK), section(12, "risk_factors", f"{BASE_RISK} {ADDED_RISK}"),
+                section(13, "risk_factors", boilerplate)]
+    wording = snapshot.risk_wording([], sections, filings, filings[0], metrics.Metrics([]), "USD")
+    assert wording["status"] == "no_material_changes"
+    assert "No material changes" in wording["note"]
+    assert [i["text"] for i in wording["items"]] == [ADDED_RISK]

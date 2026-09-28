@@ -91,6 +91,16 @@ def test_quarterly_filing_metadata_and_metrics():
     assert revenue[(2027, "Q2")].confidence_level == "high"
 
 
+@pytest.mark.parametrize("label", ["Purchases of property and equipment", "Purchases related to property and equipment (12)"])
+def test_custom_concept_capex_is_recognized_from_common_statement_labels(label):
+    body = cover("fy", "10-K", "December 31, 2025", 2025, "FY") + row(
+        label, value("acme:PropertyEquipmentPurchases", "fy", "7,800", sign="-"))
+    filing = parse(document(body, [context("fy", "2025-01-01", "2025-12-31")]))
+    extraction = extract.extract(filing, "10-K")
+    capex = metrics(extraction, "capex")[(2025, "FY")]
+    assert capex.value_normalized == 7_800e6
+
+
 def test_ifrs_filer_prefers_ifrs_concepts_and_reporting_currency():
     body = (
         cover("fy", "20-F", "December 31, 2025", 2025, "FY")

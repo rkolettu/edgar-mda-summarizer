@@ -8,15 +8,16 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, timezone
+import re
 
 import psycopg
 
-from research import changes, concepts, interpret, metrics, notes, store
+from research import changes, concepts, interpret, metrics, narrative, notes, store
 from research.extract import PARSER_VERSION
 from research.rows import fiscal_label, latest_by, reported_label, source
 
 # Bump when the payload's shape or meaning changes; stored snapshots at an older version are rebuilt on read.
-SNAPSHOT_VERSION = 7
+SNAPSHOT_VERSION = 8
 
 CAPITAL_SECTIONS = [
     ("commitment", "Commitments"),
@@ -308,8 +309,12 @@ def risk_wording(rows: list[dict], sections: list[dict], filings: list[dict], la
                  m: metrics.Metrics, currency: str | None) -> dict | None:
     """When the latest filing is an interim report without risk factors (a 6-K), the risk factor wording that changed
     between the last two annual reports; None when the latest filing's own changes cover its risk factors."""
-    if latest is None or latest["is_annual"] or any(
-            s["filing_id"] == latest["filing_id"] and s["category"] == "risk_factors" for s in sections):
+    latest_risk = [s for s in sections if latest and s["filing_id"] == latest["filing_id"] and s["category"] == "risk_factors"]
+    no_material_changes = bool(latest_risk) and any(
+        re.search(r"\b(?:there (?:have|has) been|we (?:have|identified)) no material changes?\b", s["text"], re.I)
+        for s in latest_risk
+    ) and not any(narrative.sentences(s["text"]) for s in latest_risk)
+    if latest is None or latest["is_annual"] or (latest_risk and not no_material_changes):
         return None
     records = changes.annual_risk_changes(rows, sections, filings, m, currency)
     annual = changes.Bases.of([f for f in filings if f["is_annual"]])
@@ -319,7 +324,11 @@ def risk_wording(rows: list[dict], sections: list[dict], filings: list[dict], la
     return {
         "filing": _filing_ref(annual.latest), "base": _filing_ref(annual.previous),
         "items": [_change_item(r, by_id) for r in records],
-        "note": (f"The latest filing, a {latest['form_type']} interim report, has no risk factors section; the company "
+        "status": "no_material_changes" if no_material_changes else "annual_fallback",
+        "note": ("No material changes to risk factors were reported this quarter. The annual risk factors remain applicable; "
+                 "the items below show changes between the two most recent annual reports."
+                 if no_material_changes else
+                 f"The latest filing, a {latest['form_type']} interim report, has no risk factors section; the company "
                  f"updates them in its annual report. These are the changes between its last two annual reports."),
     }
 
