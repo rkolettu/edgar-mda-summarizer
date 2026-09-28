@@ -100,9 +100,9 @@ function RotatingWord() {
 function Hero({ onPick, onSearch }) {
   return (
     <div className="relative overflow-hidden">
-      <CandleField className="field-fade absolute top-0 right-[-30%] h-full w-[120%] opacity-35 sm:right-[-12%] sm:w-[80%] sm:opacity-60 lg:right-[-6%] lg:w-[64%] lg:opacity-70" />
-      <section className="relative mx-auto grid max-w-6xl items-center gap-14 px-5 pt-14 pb-16 sm:px-8 sm:pt-20 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:gap-12 lg:pt-24 lg:pb-24">
-        <div>
+      <CandleField className="field-fade absolute top-0 right-[-35%] h-full w-[125%] opacity-35 sm:right-[-15%] sm:w-[85%] sm:opacity-70 lg:right-[-6%] lg:w-[62%] lg:opacity-100" />
+      <section className="relative mx-auto flex max-w-6xl items-center px-5 pt-14 pb-16 sm:px-8 sm:pt-20 lg:min-h-[620px] lg:pt-20 lg:pb-20">
+        <div className="max-w-[40rem]">
           <Reveal as="p" className={`mb-6 ${LABEL} text-accent`}>SEC EDGAR / Filing research</Reveal>
           <Reveal as="h1" delay={60} className="text-[clamp(3rem,6vw,5.5rem)] leading-[0.95] font-[650] tracking-[-0.06em] text-ink">
             <span aria-hidden>
@@ -127,56 +127,14 @@ function Hero({ onPick, onSearch }) {
             Free <span className="mx-2 text-line">/</span> No account <span className="mx-2 text-line">/</span> Source: SEC EDGAR
           </Reveal>
         </div>
-        <HeroCollage />
       </section>
     </div>
   )
 }
 
-// Three cards from the product (a filing passage, a trend chart, filing changes) that float and follow the pointer,
-// in front of the turning candlestick field.
-function HeroCollage() {
-  const ref = useRef(null)
-  const reduced = usePrefersReducedMotion()
-
-  useEffect(() => {
-    const el = ref.current
-    if (!el || reduced) return
-    let frame = 0
-    const onMove = (e) => {
-      cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(() => {
-        el.style.setProperty('--mx', (e.clientX / window.innerWidth - 0.5).toFixed(3))
-        el.style.setProperty('--my', (e.clientY / window.innerHeight - 0.5).toFixed(3))
-      })
-    }
-    window.addEventListener('pointermove', onMove, { passive: true })
-    return () => {
-      cancelAnimationFrame(frame)
-      window.removeEventListener('pointermove', onMove)
-    }
-  }, [reduced])
-
-  return (
-    <Reveal delay={200} className="collage relative mx-auto h-[400px] w-full max-w-[520px] sm:h-[460px]" aria-hidden>
-      <div ref={ref} className="absolute inset-0">
-        <div className="parallax absolute top-0 right-0 w-[80%]" style={{ '--depth': '14px' }}>
-          <MdnaCard className="float editorial-card" style={{ '--float-delay': '0s' }} />
-        </div>
-        <div className="parallax absolute top-[43%] left-0 w-[64%]" style={{ '--depth': '26px' }}>
-          <TrendCard className={`float ${LIFTED}`} style={{ '--float-delay': '-2s' }} />
-        </div>
-        <div className="parallax absolute right-[2%] bottom-0 w-[46%]" style={{ '--depth': '38px' }}>
-          <ChangesCard className={`float ${LIFTED}`} style={{ '--float-delay': '-4s' }} />
-        </div>
-      </div>
-    </Reveal>
-  )
-}
-
 const LIFTED = 'shadow-[0_24px_60px_-20px_rgba(36,31,24,0.25)]'
 
-// The product cards: shown in the hero, and again in the process step each one illustrates.
+// The product cards: shown under the hero, and again in the process step each one illustrates.
 function MdnaCard({ className = '', style }) {
   return (
     <div className={`${CARD} p-5 ${className}`} style={style}>
@@ -230,6 +188,32 @@ function ChangesCard({ className = '', style }) {
         <ChangeRow sign="−" color="#a43e39" label="Segment dropped" w="40%" />
       </ul>
     </div>
+  )
+}
+
+const SHOWCASE = [
+  { card: MdnaCard, title: 'Management discussion', body: 'Every insight quotes the filing, and the quote is matched against it.' },
+  { card: TrendCard, title: 'Five-year trends', body: 'Revenue, margins and cash flow from the filing’s own XBRL tags.' },
+  { card: ChangesCard, title: 'Filing changes', body: 'What the latest report adds, rewrites or drops versus last year’s.' },
+]
+
+// The product cards side by side under the hero, each with a caption.
+function Showcase() {
+  return (
+    <section aria-labelledby="showcase-heading" className="mx-auto max-w-6xl px-5 pb-6 sm:px-8">
+      <p id="showcase-heading" className={`mb-5 ${LABEL} text-muted`}>Inside a company page</p>
+      <div className="grid gap-4 md:grid-cols-3">
+        {SHOWCASE.map(({ card: Card, title, body }, i) => (
+          <Reveal key={title} delay={i * 90} className="group">
+            <div className="h-64 overflow-hidden rounded-2xl border border-line bg-panel-2 p-5 transition-colors duration-500 group-hover:bg-panel">
+              <Card className={`transition-transform duration-500 group-hover:-translate-y-1 ${LIFTED}`} />
+            </div>
+            <h3 className="mt-4 text-lg font-[620] tracking-[-0.03em] text-ink">{title}</h3>
+            <p className="mt-1 text-[15px] leading-relaxed text-ink-2">{body}</p>
+          </Reveal>
+        ))}
+      </div>
+    </section>
   )
 }
 
@@ -462,6 +446,7 @@ export default function Landing({ onPick, onSearch }) {
   return (
     <div className="landing">
       <Hero onPick={onPick} onSearch={onSearch} />
+      <Showcase />
       <CompanyMarquee onPick={onPick} />
       <Process />
       <AboutProject />
