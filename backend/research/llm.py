@@ -278,17 +278,19 @@ def reply(system: str, prompt: str) -> Reply:
         attempts.append((f"mistral:{model}", lambda: _openai_chat(MISTRAL_URL, os.environ["MISTRAL_API_KEY"], model, system, prompt)))
     if not attempts:
         raise ModelUnavailable("No chat model is configured (set GROQ_API_KEY or MISTRAL_API_KEY).", quota=False)
-    failures = []
+    failures, refused = [], []
     for name, call in attempts:
         try:
             result = call()
         except Exception as exc:  # noqa: BLE001 - every failure moves to the next model
             failures.append(_kind(exc))
+            refused.append(failures[-1] == "quota" or getattr(exc, "code", None) == 429)
             print(f"chat model {name} failed: {_kind(exc)}: {str(exc)[:200]}", flush=True)
             continue
         print(f"chat model={result.model} input={result.input_tokens} output={result.output_tokens}", flush=True)
         return result
-    raise ModelUnavailable("; ".join(f"{n}: {k}" for (n, _), k in zip(attempts, failures)), quota=all(k == "quota" for k in failures),
+    # For a question asked again in a minute, a rate limit is as good as a spent quota; an overload or a timeout is not.
+    raise ModelUnavailable("; ".join(f"{n}: {k}" for (n, _), k in zip(attempts, failures)), quota=all(refused),
                            busy=all(k in TRANSIENT for k in failures))
 
 
