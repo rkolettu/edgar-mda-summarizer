@@ -16,6 +16,15 @@ function reloadIfRedeployed(res) {
   window.location.reload()
 }
 
+// The hosting platform answers 504, with no detail of ours, when a request outlasts its time limit.
+const TIMED_OUT = 'The server took too long to answer. Anything already written is kept; try again in a few minutes.'
+
+function requestError(res, body) {
+  const error = new Error(body.detail || (res.status === 504 ? TIMED_OUT : `Request failed (${res.status})`))
+  error.status = res.status
+  return error
+}
+
 export async function getJson(path, params, signal) {
   const res = await fetch(`${API_BASE}${path}?${new URLSearchParams(params)}`, { signal })
   reloadIfRedeployed(res)
@@ -23,11 +32,7 @@ export async function getJson(path, params, signal) {
   if (res.status === 429) {
     throw new Error('This app uses my Gemini API key and has reached its usage limit. Please try again in about 3 hours.')
   }
-  if (!res.ok) {
-    const error = new Error(body.detail || `Request failed (${res.status})`)
-    error.status = res.status
-    throw error
-  }
+  if (!res.ok) throw requestError(res, body)
   return body
 }
 
@@ -39,10 +44,6 @@ export async function postJson(path, body, signal) {
     ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   })
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) {
-    const error = new Error(data.detail || `Request failed (${res.status})`)
-    error.status = res.status
-    throw error
-  }
+  if (!res.ok) throw requestError(res, data)
   return data
 }

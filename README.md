@@ -35,7 +35,9 @@ sources and coverage) so several research tabs can render without rereading fili
   company's recent filings; `--watchlist` ingests the showcase companies in `backend/research/watchlist.txt`. No model
   calls.
 - `.github/workflows/ingest.yml` runs the watchlist daily once the `DATABASE_URL` and `SEC_USER_AGENT` repository
-  secrets are set.
+  secrets are set. With `GEMINI_API_KEY` it also rewrites, on the stage's own model, any summary or omission check a
+  fallback model wrote while that model was overloaded, for every stored company (watchlist first, then the most
+  recently viewed, for up to ten minutes a run).
 - `GET /api/research/{ticker}` returns the company's research snapshot (every tab's data), parsing its filings on
   the first request; every tab reads it. Financials, Capital & Commitments and Filing Changes are built from the
   filings in code (Filing Changes ranks what the latest filing adds, changes or drops, numbers and wording, with a
@@ -44,8 +46,11 @@ sources and coverage) so several research tabs can render without rereading fili
   omission check then lists everything material code flagged (top filing changes, subsequent events, new guarantees,
   serious filing language) and shows whether the summary covers each item, what it added, and why the rest was left out.
 - `POST /api/research/{ticker}/insights` writes that analysis when it is missing (Gemini free tier: Flash-Lite reads
-  the filing text, Flash writes the summary from stored facts; Mistral's free tier is an optional fallback). The
-  legacy `/api/summarize` is used only when the research store cannot serve a company.
+  the filing text, Flash writes the summary from stored facts; Mistral's free tier is an optional fallback). Each
+  request writes one stage (extraction, summary, omission check) within a time budget, since Gemini under high
+  demand can hold a call for minutes and the stages run back to back can outlast Vercel's 300-second limit; the
+  response's `insights.more` tells the page to ask again. The legacy `/api/summarize` is used only when the research
+  store cannot serve a company.
 - `POST /api/research/{ticker}/chat` answers questions about a company's stored filings ("Ask about this filing" on
   the page). Each question is answered from the key figures and the filing passages that best match it, and the
   answer cites the passages. It runs on Groq's free tier (`GROQ_API_KEY`) with Mistral's as the fallback, never on

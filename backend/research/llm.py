@@ -5,6 +5,9 @@ Extraction reads filing text and runs on a Flash-Lite model; synthesis reads onl
 runs on Flash. A spent quota, a model the project cannot use (Google limits 2.5 models to projects that already used
 them), an overloaded model or malformed output moves on to the next model in the stage's chain; Mistral's free tier
 is the last resort when MISTRAL_API_KEY is set. Callers never see a provider error, only a Result or ModelUnavailable.
+
+Every call has a timeout. A web request also passes a deadline: no attempt starts that could not finish by then, and a
+model that is not the last in the chain leaves time for the next one.
 """
 
 from __future__ import annotations
@@ -27,12 +30,19 @@ STAGES = {
     "audit": ("GEMINI_AUDIT_MODEL", "gemini-3.8-flash", "LOW"),
 }
 MAX_OUTPUT_TOKENS = 16_384
+# Under high demand Gemini can hold a request for minutes before answering (an omission check once took 156s to return
+# 190 tokens), so a call is abandoned only after this long.
+CALL_TIMEOUT_SECONDS = 300
+# Under a deadline, a model with another behind it in the chain leaves the next one this long, and no attempt starts
+# with less than MIN_ATTEMPT_SECONDS to run.
+FALLBACK_RESERVE_SECONDS = 60
+MIN_ATTEMPT_SECONDS = 20
 MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions"
 MISTRAL_TIMEOUT = 180
 UNAVAILABLE_MARKERS = ("not found", "not supported", "permission", "limiting access", "unavailable", "overloaded")
-# Google answers 503 "experiencing high demand" in short spikes: the same model is tried again after these waits
-# before the stage falls back to a smaller one.
-OVERLOAD_WAITS = (4, 10)
+# Google answers 503 "experiencing high demand" in spikes that often last more than a few seconds: the same model is
+# tried again after these waits before the stage falls back to a smaller one.
+OVERLOAD_WAITS = (5, 15, 30)
 OVERLOAD_MARKERS = ("high demand", "overloaded", "try again later")
 
 
@@ -67,12 +77,21 @@ def _overloaded(exc: Exception) -> bool:
     return getattr(exc, "code", None) in (500, 502, 503) or any(m in str(exc).lower() for m in OVERLOAD_MARKERS)
 
 
-def _gemini_retrying(model: str, stage: str, system: str, contents: str, schema: type[BaseModel]) -> Result:
+def _budget(deadline: float | None, reserve: float = 0, wait: float = 0) -> float | None:
+    """Seconds a call starting after `wait` may run, or None when too little time is left before the deadline."""
+    if deadline is None:
+        return CALL_TIMEOUT_SECONDS
+    left = deadline - time.monotonic() - wait - reserve
+    return min(CALL_TIMEOUT_SECONDS, left) if left >= MIN_ATTEMPT_SECONDS else None
+
+
+def _gemini_retrying(model: str, stage: str, system: str, contents: str, schema: type[BaseModel],
+                     deadline: float | None, reserve: float) -> Result:
     for wait in (*OVERLOAD_WAITS, None):
         try:
-            return _gemini(model, stage, system, contents, schema)
+            return _gemini(model, stage, system, contents, schema, _budget(deadline, reserve) or MIN_ATTEMPT_SECONDS)
         except Exception as exc:  # noqa: BLE001 - only an overload is retried; anything else goes to the caller
-            if wait is None or not _overloaded(exc):
+            if wait is None or not _overloaded(exc) or _budget(deadline, reserve, wait) is None:
                 raise
             print(f"research model {model} overloaded for {stage}; retrying in {wait}s", flush=True)
             time.sleep(wait)
@@ -94,6 +113,8 @@ def _kind(exc: Exception) -> str:
         return "malformed output"
     code = getattr(exc, "code", None)
     message = str(exc).lower()
+    if isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower() or code in (408, 504):
+        return "timed out"
     if code == 429:
         return "quota"
     if code in (400, 403, 404, 500, 502, 503) or any(marker in message for marker in UNAVAILABLE_MARKERS):
@@ -101,7 +122,8 @@ def _kind(exc: Exception) -> str:
     return "error"
 
 
-def _gemini(model: str, stage: str, system: str, contents: str, schema: type[BaseModel]) -> Result:
+def _gemini(model: str, stage: str, system: str, contents: str, schema: type[BaseModel],
+            timeout: float = CALL_TIMEOUT_SECONDS) -> Result:
     # Gemini 3 models are tuned for their default temperature; depth of reasoning is set per stage instead.
     thinking = ({"thinking_config": types.ThinkingConfig(thinking_level=STAGES[stage][2])} if model.startswith("gemini-3")
                 else {"temperature": 0})
@@ -110,7 +132,7 @@ def _gemini(model: str, stage: str, system: str, contents: str, schema: type[Bas
         contents=contents,
         config=types.GenerateContentConfig(
             system_instruction=system, response_mime_type="application/json", response_schema=schema,
-            max_output_tokens=MAX_OUTPUT_TOKENS, **thinking,
+            max_output_tokens=MAX_OUTPUT_TOKENS, http_options=types.HttpOptions(timeout=int(timeout * 1000)), **thinking,
         ),
     )
     data = schema.model_validate(json.loads(response.text))
@@ -118,7 +140,7 @@ def _gemini(model: str, stage: str, system: str, contents: str, schema: type[Bas
     return Result(data, model, getattr(usage, "prompt_token_count", None), getattr(usage, "candidates_token_count", None))
 
 
-def _mistral(system: str, contents: str, schema: type[BaseModel]) -> Result:
+def _mistral(system: str, contents: str, schema: type[BaseModel], timeout: float = MISTRAL_TIMEOUT) -> Result:
     model = os.environ.get("MISTRAL_MODEL", "mistral-small-latest")
     response = requests.post(
         MISTRAL_URL,
@@ -133,7 +155,7 @@ def _mistral(system: str, contents: str, schema: type[BaseModel]) -> Result:
                 {"role": "user", "content": contents},
             ],
         },
-        timeout=MISTRAL_TIMEOUT,
+        timeout=timeout,
     )
     if response.status_code == 429:
         raise ModelUnavailable("mistral: quota", quota=True)
@@ -144,23 +166,32 @@ def _mistral(system: str, contents: str, schema: type[BaseModel]) -> Result:
     return Result(data, model, usage.get("prompt_tokens"), usage.get("completion_tokens"))
 
 
-def generate(stage: str, system: str, contents: str, schema: type[BaseModel], preferred_only: bool = False) -> Result:
+def generate(stage: str, system: str, contents: str, schema: type[BaseModel], preferred_only: bool = False,
+             deadline: float | None = None) -> Result:
     """Runs a stage on its model, falling back along its chain. With preferred_only, only the stage's own model is
-    tried (rewriting an answer a fallback model gave is worth doing only with the better model)."""
+    tried (rewriting an answer a fallback model gave is worth doing only with the better model). With a deadline
+    (time.monotonic()), no attempt starts that could not finish by then."""
     failures: list[tuple[str, str]] = []
-    if os.environ.get("GEMINI_API_KEY"):
-        for model in chain(stage)[:1] if preferred_only else chain(stage):
-            try:
-                result = _gemini_retrying(model, stage, system, contents, schema)
-            except Exception as exc:  # noqa: BLE001 - every failure moves to the next model
-                failures.append((model, _kind(exc)))
-                print(f"research model {model} failed for {stage}: {_kind(exc)}: {str(exc)[:200]}", flush=True)
-                continue
-            _log(stage, schema, result)
-            return result
-    if os.environ.get("MISTRAL_API_KEY") and not preferred_only:
+    mistral = bool(os.environ.get("MISTRAL_API_KEY")) and not preferred_only
+    models = (chain(stage)[:1] if preferred_only else chain(stage)) if os.environ.get("GEMINI_API_KEY") else []
+    for n, model in enumerate(models):
+        reserve = FALLBACK_RESERVE_SECONDS if n < len(models) - 1 or mistral else 0
+        if _budget(deadline, reserve) is None:
+            failures.append((model, "out of time"))
+            continue
         try:
-            result = _mistral(system, contents, schema)
+            result = _gemini_retrying(model, stage, system, contents, schema, deadline, reserve)
+        except Exception as exc:  # noqa: BLE001 - every failure moves to the next model
+            failures.append((model, _kind(exc)))
+            print(f"research model {model} failed for {stage}: {_kind(exc)}: {str(exc)[:200]}", flush=True)
+            continue
+        _log(stage, schema, result)
+        return result
+    if mistral and _budget(deadline) is None:
+        failures.append(("mistral", "out of time"))
+    elif mistral:
+        try:
+            result = _mistral(system, contents, schema, min(_budget(deadline), MISTRAL_TIMEOUT))
         except ModelUnavailable:
             failures.append(("mistral", "quota"))
         except Exception as exc:  # noqa: BLE001

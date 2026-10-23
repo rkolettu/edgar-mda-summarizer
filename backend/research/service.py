@@ -21,8 +21,12 @@ MAX_COMPANIES = 100
 STORAGE_BRAKE_BYTES = 450_000_000
 BUSY_RETRIES = 20
 BUSY_WAIT_SECONDS = 3
+# Vercel stops a function after 300 seconds, and the model stages run back to back can take longer (Gemini under high
+# demand holds a call for minutes). So each insights request runs one stage, whose model calls must finish this many
+# seconds into the request, leaving time to store the output and rebuild the snapshot; the page asks again for the rest.
+INSIGHTS_MODEL_SECONDS = 230
 # How long a request waits for another worker's model stages before telling the page to retry.
-INSIGHTS_WAIT_SECONDS = 150
+INSIGHTS_WAIT_SECONDS = 90
 # After a spent quota, requests for the same company do not retry the models for this long.
 QUOTA_BACKOFF_MINUTES = 30
 QUOTA_MESSAGE = ("The free AI quota is used up for now, so the AI analysis could not be written. The tabs built from "
@@ -95,7 +99,8 @@ def _ingest_waiting_for_others(conn, query: str) -> dict:
 
 
 def generate_insights(query: str) -> dict:
-    """Runs the model stages the company is missing and returns its snapshot with the AI analysis merged in."""
+    """Runs the next model stage the company is missing and returns its snapshot with the AI analysis merged in;
+    `insights.more` tells the page to ask again for the next stage."""
     if not llm.configured():
         raise HTTPException(status_code=503, detail="AI analysis is not configured on this server.")
     with db.connect() as conn:
@@ -105,13 +110,13 @@ def generate_insights(query: str) -> dict:
         company_id = company["company_id"]
         if store.recent_quota_failure(conn, company_id, QUOTA_BACKOFF_MINUTES):
             raise HTTPException(status_code=429, detail=QUOTA_MESSAGE)
-        deadline = time.monotonic() + INSIGHTS_WAIT_SECONDS
+        started = time.monotonic()
         while True:
             try:
-                interpret.run(conn, company_id)
+                produced = interpret.run(conn, company_id, step=True, deadline=started + INSIGHTS_MODEL_SECONDS)
                 break
             except interpret.Busy as exc:
-                if time.monotonic() > deadline:
+                if time.monotonic() > started + INSIGHTS_WAIT_SECONDS:
                     raise HTTPException(status_code=503, detail="The AI analysis is still being written; try again in a minute.") from exc
                 time.sleep(BUSY_WAIT_SECONDS)
             except llm.ModelUnavailable as exc:
@@ -120,8 +125,14 @@ def generate_insights(query: str) -> dict:
                 raise HTTPException(status_code=503, detail=f"The AI analysis is unavailable ({exc}).") from exc
         stored = store.load_snapshot(conn, company_id)
         if stored is None or stored["snapshot_version"] != snapshot.SNAPSHOT_VERSION:
-            return _served(snapshot.rebuild(conn, company_id))
-        return _served(stored["payload"])
+            payload = _served(snapshot.rebuild(conn, company_id))
+        else:
+            payload = _served(stored["payload"])
+        insights = payload.get("insights")
+        if insights is not None:
+            # A stage was written and the summary or its omission check is still missing.
+            insights["more"] = produced and not (insights.get("status") == "ready" and insights.get("audit"))
+        return payload
 
 
 CHAT_QUOTA_MESSAGE = "The chat's free AI quota is used up for the moment; try again in a minute."

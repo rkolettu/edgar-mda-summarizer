@@ -42,7 +42,17 @@ const TABS = [
 ]
 
 const RESEARCH_LOADING = "A company's first visit parses its recent annual and quarterly reports from SEC EDGAR, which can take up to a minute; later visits load from the database."
-const INSIGHTS_LOADING = "Writing the AI analysis from the stored filings. A company's first visit takes about one to two minutes; later visits load instantly."
+const INSIGHTS_LOADING = "Writing the AI analysis from the stored filings, one step at a time. A company's first visit takes a few minutes; later visits load instantly."
+// Each request writes one stage of the AI analysis; a few more than its three stages allows for one shared with
+// another visitor.
+const MAX_INSIGHTS_REQUESTS = 5
+
+// Which stage is being written, from what is stored so far.
+function insightsStep(insights) {
+  if (insights?.status === 'ready') return 'Step 3 of 3 · Checking the summary for anything it left out'
+  if (insights?.status === 'partial') return 'Step 2 of 3 · Writing the summary'
+  return 'Step 1 of 3 · Reading the filings'
+}
 
 const SECTIONS = [
   { key: 'revenue_drivers', title: 'Revenue drivers' },
@@ -291,9 +301,15 @@ export default function App() {
     if ((data.insights?.status === 'ready' && data.insights?.audit) || !data.insights?.configured) return
     setInsightsRequest({ status: 'loading' })
     try {
-      const updated = await postJson(`/api/research/${encodeURIComponent(ticker)}/insights`)
-      if (!current()) return
-      setResearch({ status: 'ready', data: updated })
+      // Run back to back, the stages can outlast the server's time limit, so each request writes one and says
+      // whether another is left.
+      let more = true
+      for (let requests = 0; more && requests < MAX_INSIGHTS_REQUESTS; requests++) {
+        const updated = await postJson(`/api/research/${encodeURIComponent(ticker)}/insights`)
+        if (!current()) return
+        setResearch({ status: 'ready', data: updated })
+        more = Boolean(updated.insights?.more)
+      }
       setInsightsRequest({ status: 'done' })
     } catch (err) {
       if (current()) setInsightsRequest({ status: 'error', error: err.message || 'Unexpected error' })
@@ -334,6 +350,7 @@ export default function App() {
           <LoadingState
             ticker={activeQuery}
             message={research.status === 'loading' ? RESEARCH_LOADING : writingInsights ? INSIGHTS_LOADING : undefined}
+            step={writingInsights ? insightsStep(research.data.insights) : undefined}
           />
         )}
 
