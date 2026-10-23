@@ -29,6 +29,10 @@ DEFAULT_ANNUAL = 3
 INTERIM_YEARS = 2
 # Pause between filings so a watchlist run stays far below SEC's 10 requests per second.
 PAUSE_SECONDS = 0.3
+# The workflow allows a run 30 minutes: no model call starts after MODEL_MINUTES, and rewriting other companies'
+# fallback-written summaries gets at most UPGRADE_MINUTES of the time the watchlist leaves.
+MODEL_MINUTES = 22
+UPGRADE_MINUTES = 10
 
 
 def read_watchlist(path: Path = WATCHLIST) -> list[str]:
@@ -229,17 +233,34 @@ def _detail(result: dict) -> str:
     return f"{result['facts']} facts, {result['sections']} sections, confidence {result['confidence']}{missing}"
 
 
-def _interpret(conn, company_id: int) -> bool:
+def _interpret(conn, company_id: int, deadline: float | None = None) -> bool:
     if not llm.configured():
         print("  AI analysis skipped: no GEMINI_API_KEY or MISTRAL_API_KEY", flush=True)
         return True
     try:
-        produced = interpret.run(conn, company_id, upgrade=True)
+        produced = interpret.run(conn, company_id, upgrade=True, deadline=deadline)
     except (llm.ModelUnavailable, interpret.Busy) as exc:
         print(f"  AI analysis not written: {exc}", flush=True)
         return isinstance(exc, interpret.Busy) or bool(getattr(exc, "quota", False))  # quota is not a job failure
     print(f"  AI analysis {'written' if produced else 'already current'}", flush=True)
     return True
+
+
+def _upgrade_others(conn, done: set[int], deadline: float) -> None:
+    """Companies opened on the site are written on demand, often by a fallback model while the stage's own is
+    overloaded, and are not on the watchlist this job refreshes; their summaries are rewritten here, most recently
+    viewed first, for up to UPGRADE_MINUTES. Best effort: a model that still cannot answer is not a job failure."""
+    if not llm.configured():
+        return
+    deadline = min(deadline, time.monotonic() + UPGRADE_MINUTES * 60)
+    for company_id, ticker in interpret.upgradable(conn):
+        if company_id in done:
+            continue
+        if time.monotonic() >= deadline:
+            print("Out of time for upgrades; the rest wait for the next run", flush=True)
+            return
+        print(f"{ticker or company_id}: AI analysis written by a fallback model", flush=True)
+        _interpret(conn, company_id, deadline)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -259,6 +280,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("name at least one ticker, or pass --watchlist")
 
     failures = 0
+    done: set[int] = set()
+    deadline = time.monotonic() + MODEL_MINUTES * 60
     with db.connect() as conn:
         for query in queries:
             try:
@@ -267,12 +290,15 @@ def main(argv: list[str] | None = None) -> int:
                 failures += 1
                 print(f"{query}: failed: {_error(exc)}", flush=True)
                 continue
+            done.add(result["company_id"])
             print(f"{result['ticker']} (CIK {result['cik']})", flush=True)
             for f in result["filings"]:
                 print(f"  {f['form']:<6} {f['report_date']}  {f['status']:<11} {_detail(f)}", flush=True)
                 failures += f["status"] == "failed"
             if args.interpret:
-                failures += not _interpret(conn, result["company_id"])
+                failures += not _interpret(conn, result["company_id"], deadline)
+        if args.interpret:
+            _upgrade_others(conn, done, deadline)
         print(f"Database size: {store.storage_bytes(conn) / 1e6:.1f} MB", flush=True)
     return 1 if failures else 0
 

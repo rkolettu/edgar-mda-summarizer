@@ -533,12 +533,16 @@ class Busy(Exception):
     """Another worker is running a stage this request needs."""
 
 
-def run(conn: psycopg.Connection, company_id: int, force: bool = False, upgrade: bool = False) -> bool:
+def run(conn: psycopg.Connection, company_id: int, force: bool = False, upgrade: bool = False, step: bool = False,
+        deadline: float | None = None) -> bool:
     """Runs the stages the company is missing. Returns True when anything new was produced.
 
     With upgrade (the daily job), a summary or omission check that a fallback model wrote because the stage's own
     model was overloaded or out of quota is written again on that model; if it still cannot answer, the fallback's
-    stays. Raises llm.ModelUnavailable when no model can answer, and Busy when another worker holds a needed stage."""
+    stays. With step (a web request), it returns after the first stage that produced anything: run back to back, the
+    stages can outlast the serverless time limit, so the page asks again for the rest. A deadline (time.monotonic())
+    bounds the model calls. Raises llm.ModelUnavailable when no model can answer, and Busy when another worker holds a
+    needed stage."""
     from research import snapshot  # snapshot reads this module's outputs
 
     company = store.find_company(conn, company_id=company_id)
@@ -571,7 +575,8 @@ def run(conn: psycopg.Connection, company_id: int, force: bool = False, upgrade:
         rows = store.company_facts(conn, company_id)
         # Model calls run in parallel; database writes stay on this connection's thread.
         with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-            futures = [(job, pool.submit(llm.generate, "extract", EXTRACT_PROMPT, job.text, Extraction)) for job in jobs]
+            futures = [(job, pool.submit(llm.generate, "extract", EXTRACT_PROMPT, job.text, Extraction, deadline=deadline))
+                       for job in jobs]
             failure = None
             for job, future in futures:
                 try:
@@ -590,6 +595,9 @@ def run(conn: psycopg.Connection, company_id: int, force: bool = False, upgrade:
             if failure:
                 raise failure
         outputs = stored_outputs(conn, company_id)
+        if step:
+            snapshot.rebuild(conn, company_id)
+            return True
 
     latest = chosen[0]
     rewritten = False
@@ -606,7 +614,8 @@ def run(conn: psycopg.Connection, company_id: int, force: bool = False, upgrade:
             extractions = [(f, outputs[(f["filing_id"], "extract")]["output"]) for f in chosen
                            if (f["filing_id"], "extract") in outputs]
             source = synthesis_input(payload, extractions)
-            result = llm.generate("synthesize", SYNTH_PROMPT, source.text, Synthesis, preferred_only=upgrading)
+            result = llm.generate("synthesize", SYNTH_PROMPT, source.text, Synthesis, preferred_only=upgrading,
+                                  deadline=deadline)
             output = verify_synthesis(result.data, source, payload)
             with conn.transaction():
                 _save(conn, company_id, latest["filing_id"], "synthesize", SYNTH_VERSION, result.model, len(source.text), output)
@@ -626,13 +635,17 @@ def run(conn: psycopg.Connection, company_id: int, force: bool = False, upgrade:
             if upgrading:
                 rewritten = True
                 redo.add("audit")  # the check reviews the summary, so a new summary needs a new check
+            if step:
+                snapshot.rebuild(conn, company_id)
+                return True
         outputs = stored_outputs(conn, company_id)
 
     if (latest["filing_id"], "synthesize") in outputs and ((latest["filing_id"], "audit") not in outputs or force or "audit" in redo):
         # A check redone only to upgrade it is worth writing only on the check's own model.
         preferred_only = "audit" in redo and not force and not rewritten
         try:
-            produced |= _run_audit(conn, company_id, filings, chosen, outputs, force or "audit" in redo, preferred_only)
+            produced |= _run_audit(conn, company_id, filings, chosen, outputs, force or "audit" in redo, preferred_only,
+                                   deadline)
         except (llm.ModelUnavailable, Busy) as exc:
             # The summary stands without its check; the next request (or the daily job) runs the audit again.
             print(f"omission audit not run: {exc}", flush=True)
@@ -647,8 +660,23 @@ def _by_fallback(output: dict | None, stage: str) -> bool:
     return output is not None and output["model"] not in ("none", llm.preferred(stage))
 
 
+def upgradable(conn: psycopg.Connection) -> list[tuple[int, str | None]]:
+    """(company_id, ticker) of the companies whose summary or omission check a fallback model wrote, most recently
+    viewed first."""
+    return conn.execute(
+        """
+        SELECT c.company_id, c.ticker FROM companies c
+        WHERE EXISTS (SELECT 1 FROM model_outputs o WHERE o.company_id = c.company_id AND (
+            (o.stage = 'synthesize' AND o.pipeline_version = %s AND o.model <> %s)
+            OR (o.stage = 'audit' AND o.pipeline_version = %s AND o.model NOT IN ('none', %s))))
+        ORDER BY c.last_viewed_at DESC NULLS LAST, c.company_id
+        """,
+        (SYNTH_VERSION, llm.preferred("synthesize"), AUDIT_VERSION, llm.preferred("audit")),
+    ).fetchall()
+
+
 def _run_audit(conn: psycopg.Connection, company_id: int, filings: list[dict], chosen: list[dict], outputs: dict,
-               force: bool, preferred_only: bool = False) -> bool:
+               force: bool, preferred_only: bool = False, deadline: float | None = None) -> bool:
     from research import audit, snapshot
 
     latest = chosen[0]
@@ -666,7 +694,8 @@ def _run_audit(conn: psycopg.Connection, company_id: int, filings: list[dict], c
         model, tokens, text = "none", (None, None), ""
         if open_items:
             text = audit.audit_input(payload, synth, open_items)
-            result = llm.generate("audit", audit.AUDIT_PROMPT, text, audit.Audit, preferred_only=preferred_only)
+            result = llm.generate("audit", audit.AUDIT_PROMPT, text, audit.Audit, preferred_only=preferred_only,
+                                  deadline=deadline)
             output = audit.verify(result.data, text, payload, synth, items)
             model, tokens = result.model, (result.input_tokens, result.output_tokens)
         else:

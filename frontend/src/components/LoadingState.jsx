@@ -21,7 +21,7 @@ function SkeletonSection() {
 
 const SUMMARY_MESSAGE = 'A first-time analysis can take a few minutes. This uses my Gemini API key; if its usage limit is reached, please try again in about 3 hours.'
 
-export default function LoadingState({ ticker, message = SUMMARY_MESSAGE }) {
+export default function LoadingState({ ticker, message = SUMMARY_MESSAGE, step }) {
   const [elapsed, setElapsed] = useState(0)
   useEffect(() => {
     const id = setInterval(() => setElapsed((e) => e + 1), 1000)
@@ -35,7 +35,7 @@ export default function LoadingState({ ticker, message = SUMMARY_MESSAGE }) {
         <h1 className="text-3xl font-semibold tracking-[-0.05em] text-ink sm:text-4xl">Reading the filing.</h1>
         <p className="mt-3 text-sm leading-relaxed text-ink-2">{message}</p>
         <div className="loading-rule mt-6 h-1 w-full max-w-sm overflow-hidden rounded-full bg-line" aria-hidden="true" />
-        <p className="mt-3 font-mono text-xs text-muted">{elapsed}s elapsed</p>
+        <p className="mt-3 font-mono text-xs text-muted">{step && `${step} · `}{elapsed}s elapsed</p>
       </div>
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]" aria-hidden="true">
         <div className="space-y-5"><SkeletonSection /><SkeletonSection /></div>

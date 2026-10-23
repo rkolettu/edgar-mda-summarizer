@@ -1,3 +1,6 @@
+import time
+
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -124,7 +127,7 @@ def test_model_chain_moves_past_quota_and_unavailable_models(monkeypatch):
     monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
     attempts = []
 
-    def fake(model, stage, system, contents, schema):
+    def fake(model, stage, system, contents, schema, timeout=None):
         attempts.append(model)
         if model == "gemini-3.5-flash-lite":
             raise ProviderError(429, "RESOURCE_EXHAUSTED: quota exceeded")
@@ -161,12 +164,71 @@ def test_gemini_3_sets_thinking_depth_and_older_models_temperature(model):
     first, second = (c["config"] for c in model.calls)
     assert first.thinking_config.thinking_level == "LOW" and first.temperature is None
     assert second.thinking_config is None and second.temperature == 0
+    assert first.http_options.timeout == llm.CALL_TIMEOUT_SECONDS * 1000  # the SDK's default is to wait forever
 
 
-def test_insights_endpoint(research_conn, company, model):
+def test_a_deadline_bounds_every_call_and_leaves_the_fallback_time(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    calls = []
+
+    def queued(model, stage, system, contents, schema, timeout):
+        calls.append((model, timeout))
+        if model == "gemini-3.8-flash":
+            raise httpx.ReadTimeout("The read operation timed out")  # held in Google's queue past the timeout
+        return llm.Result(interpret.Extraction.model_validate(extraction()), model, 10, 5)
+
+    monkeypatch.setattr(llm, "_gemini", queued)
+    result = llm.generate("synthesize", "", "", interpret.Extraction, deadline=time.monotonic() + 200)
+    assert result.model == "gemini-3.5-flash-lite"
+    (_, first), (_, last) = calls
+    assert 135 < first <= 140  # a minute is left for the model behind it
+    assert 190 < last <= 200  # the last model may use the rest
+
+    # Too little time left: nothing starts, and the reason is not a spent quota.
+    calls.clear()
+    with pytest.raises(llm.ModelUnavailable, match="out of time") as exc:
+        llm.generate("synthesize", "", "", interpret.Extraction, deadline=time.monotonic() + 10)
+    assert calls == [] and not exc.value.quota
+
+    # Without a deadline (the daily job) a call still has a timeout.
+    llm.generate("extract", "", "", interpret.Extraction)
+    assert calls == [("gemini-3.5-flash-lite", llm.CALL_TIMEOUT_SECONDS)]
+
+
+def test_an_overload_wait_that_would_pass_the_deadline_falls_back_at_once(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    monkeypatch.setattr(llm, "OVERLOAD_WAITS", (100,))
+    slept = []
+    monkeypatch.setattr(llm.time, "sleep", slept.append)
+    attempts = []
+
+    def overloaded(model, *args):
+        attempts.append(model)
+        if model == "gemini-3.8-flash":
+            raise ProviderError(503, "This model is currently experiencing high demand. Please try again later.")
+        return llm.Result(interpret.Extraction.model_validate(extraction()), model, 10, 5)
+
+    monkeypatch.setattr(llm, "_gemini", overloaded)
+    assert llm.generate("synthesize", "", "", interpret.Extraction, deadline=time.monotonic() + 150).model == "gemini-3.5-flash-lite"
+    assert attempts == ["gemini-3.8-flash", "gemini-3.5-flash-lite"] and slept == []
+
+
+def test_insights_endpoint_writes_one_stage_per_request(research_conn, company, model):
+    # Run back to back the stages can outlast the serverless time limit, so the page asks once per stage.
     client = TestClient(main.app)
-    res = client.post("/api/research/NVDA/insights")
-    assert res.status_code == 200 and res.json()["insights"]["status"] == "ready"
+    steps = []
+    for _ in range(4):
+        res = client.post("/api/research/NVDA/insights")
+        assert res.status_code == 200
+        insights = res.json()["insights"]
+        steps.append((insights["status"], insights["audit"] is not None, insights["more"]))
+    assert steps == [("partial", False, True), ("ready", False, True), ("ready", True, False), ("ready", True, False)]
+    assert [c["schema"] for c in model.calls] == ["Extraction", "Extraction", "Synthesis"]  # nothing written twice
+    assert "more" not in client.get("/api/research/NVDA").json()["insights"]
 
 
 def test_insights_endpoint_backs_off_after_a_spent_quota(research_conn, company, model, monkeypatch):
@@ -215,7 +277,7 @@ def test_an_overloaded_model_is_retried_before_falling_back(monkeypatch):
     monkeypatch.setattr(llm, "OVERLOAD_WAITS", (0, 0))
     attempts = []
 
-    def busy_twice(model, stage, system, contents, schema):
+    def busy_twice(model, stage, system, contents, schema, timeout=None):
         attempts.append(model)
         if len(attempts) <= 2:
             raise ProviderError(503, "This model is currently experiencing high demand. Please try again later.")
@@ -263,3 +325,27 @@ def test_the_daily_job_rewrites_a_summary_a_fallback_model_wrote(research_conn, 
     assert interpret.run(research_conn, company_id, upgrade=True) is True
     assert synth_model(research_conn, company_id) == "gemini-3.8-flash"
     assert interpret.run(research_conn, company_id, upgrade=True) is False
+
+
+def test_the_daily_job_rewrites_fallback_summaries_of_companies_opened_on_the_site(research_conn, company, model, monkeypatch):
+    monkeypatch.setattr(llm, "OVERLOAD_WAITS", ())
+    down = {"gemini-3.8-flash"}
+    real = llm._gemini
+    monkeypatch.setattr(llm, "_gemini", lambda name, *a: (_ for _ in ()).throw(ProviderError(503, "high demand"))
+                        if name in down else real(name, *a))
+    company_id = company["company_id"]
+    client = TestClient(main.app)
+    while client.post("/api/research/NVDA/insights").json()["insights"]["more"]:
+        pass
+    assert synth_model(research_conn, company_id) == "gemini-3.5-flash-lite"
+    assert interpret.upgradable(research_conn) == [(company_id, "NVDA")]
+
+    # Not on the watchlist, so only the sweep reaches it; a company the run already handled is skipped.
+    down.clear()
+    ingest._upgrade_others(research_conn, {company_id}, time.monotonic() + 600)
+    assert synth_model(research_conn, company_id) == "gemini-3.5-flash-lite"
+    ingest._upgrade_others(research_conn, set(), time.monotonic() + 600)
+    assert synth_model(research_conn, company_id) == "gemini-3.8-flash"
+    assert interpret.upgradable(research_conn) == []
+    insights = client.get("/api/research/NVDA").json()["insights"]
+    assert insights["models"] == ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
