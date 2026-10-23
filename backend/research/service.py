@@ -29,6 +29,8 @@ INSIGHTS_MODEL_SECONDS = 230
 INSIGHTS_WAIT_SECONDS = 90
 # After a spent quota, requests for the same company do not retry the models for this long.
 QUOTA_BACKOFF_MINUTES = 30
+BUSY_MESSAGE = ("Google's AI models are overloaded right now ({}), so this step of the AI analysis could not be written. "
+                "What is already written is kept; try again in a few minutes.")
 QUOTA_MESSAGE = ("The free AI quota is used up for now, so the AI analysis could not be written. The tabs built from "
                  "the filings still work; try again later.")
 
@@ -122,6 +124,8 @@ def generate_insights(query: str) -> dict:
             except llm.ModelUnavailable as exc:
                 if exc.quota:
                     raise HTTPException(status_code=429, detail=QUOTA_MESSAGE) from exc
+                if exc.busy:
+                    raise HTTPException(status_code=503, detail=BUSY_MESSAGE.format(exc)) from exc
                 raise HTTPException(status_code=503, detail=f"The AI analysis is unavailable ({exc}).") from exc
         stored = store.load_snapshot(conn, company_id)
         if stored is None or stored["snapshot_version"] != snapshot.SNAPSHOT_VERSION:
@@ -152,6 +156,6 @@ def ask(query: str, question: str, history: list[dict]) -> dict:
         except chat.InvalidQuestion as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except llm.ModelUnavailable as exc:
-            if exc.quota:
+            if exc.quota or exc.busy:
                 raise HTTPException(status_code=429, detail=CHAT_QUOTA_MESSAGE) from exc
             raise HTTPException(status_code=503, detail=f"The filing chat is unavailable ({exc}).") from exc

@@ -241,7 +241,8 @@ def _interpret(conn, company_id: int, deadline: float | None = None) -> bool:
         produced = interpret.run(conn, company_id, upgrade=True, deadline=deadline)
     except (llm.ModelUnavailable, interpret.Busy) as exc:
         print(f"  AI analysis not written: {exc}", flush=True)
-        return isinstance(exc, interpret.Busy) or bool(getattr(exc, "quota", False))  # quota is not a job failure
+        # A spent quota or an overloaded model is not a job failure; the next run tries again.
+        return isinstance(exc, interpret.Busy) or bool(getattr(exc, "quota", False) or getattr(exc, "busy", False))
     print(f"  AI analysis {'written' if produced else 'already current'}", flush=True)
     return True
 

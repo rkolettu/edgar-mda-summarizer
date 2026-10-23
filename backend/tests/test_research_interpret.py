@@ -1,3 +1,4 @@
+import json
 import time
 
 import httpx
@@ -183,7 +184,7 @@ def test_a_deadline_bounds_every_call_and_leaves_the_fallback_time(monkeypatch):
     result = llm.generate("synthesize", "", "", interpret.Extraction, deadline=time.monotonic() + 200)
     assert result.model == "gemini-3.5-flash-lite"
     (_, first), (_, last) = calls
-    assert 135 < first <= 140  # a minute is left for the model behind it
+    assert 95 < first <= 100  # the model behind it is left time to write a summary under load
     assert 190 < last <= 200  # the last model may use the rest
 
     # Too little time left: nothing starts, and the reason is not a spent quota.
@@ -349,3 +350,107 @@ def test_the_daily_job_rewrites_fallback_summaries_of_companies_opened_on_the_si
     assert interpret.upgradable(research_conn) == []
     insights = client.get("/api/research/NVDA").json()["insights"]
     assert insights["models"] == ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
+
+
+class MistralResponse:
+    def __init__(self, status_code, body):
+        self.status_code, self.text, self._body = status_code, json.dumps(body), body
+
+    def json(self):
+        return self._body
+
+
+def mistral_answer(payload):
+    return MistralResponse(200, {"choices": [{"message": {"content": json.dumps(payload)}}], "usage": {}})
+
+
+RATE_LIMITED = MistralResponse(429, {"message": "Requests rate limit exceeded"})
+HIGH_DEMAND = "503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand.'}}"
+
+
+def test_failures_are_labelled_for_what_they_are():
+    per_minute = ProviderError(429, "429 RESOURCE_EXHAUSTED. You exceeded your current quota. Quota exceeded for metric: "
+                                    "generate_content_free_tier_requests, quotaId: GenerateRequestsPerMinutePerProjectPerModel-FreeTier")
+    per_day = ProviderError(429, "429 RESOURCE_EXHAUSTED. You exceeded your current quota, quotaId: "
+                                 "GenerateRequestsPerDayPerProjectPerModel-FreeTier")
+    assert llm._kind(ProviderError(503, HIGH_DEMAND)) == "busy"
+    assert llm._kind(per_minute) == "busy" and llm._kind(per_day) == "quota"
+    assert llm._kind(ProviderError(429, '429: {"message":"Requests rate limit exceeded"}')) == "busy"  # Mistral, 1 req/s
+    assert llm._kind(ProviderError(429, '429: {"message":"Service tier capacity exceeded for this model."}')) == "busy"
+    assert llm._kind(ProviderError(404, "models/gemini-2.5-flash is not found")) == "unavailable"
+    assert llm._kind(httpx.ReadTimeout("The read operation timed out")) == "timed out"
+
+
+def test_a_rate_limited_mistral_is_retried_not_called_out_of_quota(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("MISTRAL_API_KEY", "mistral-test")
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    monkeypatch.setattr(llm, "OVERLOAD_WAITS", (0,))
+    monkeypatch.setattr(llm, "_gemini", lambda *a: (_ for _ in ()).throw(ProviderError(503, HIGH_DEMAND)))
+    replies = [RATE_LIMITED, mistral_answer(extraction())]
+    monkeypatch.setattr(llm.requests, "post", lambda *a, **k: replies.pop(0))
+    assert llm.generate("extract", "", "", interpret.Extraction).model == "mistral-small-latest"
+
+    # Still rate limited after its retry: the stage failed because everything was busy, not out of quota.
+    monkeypatch.setattr(llm.requests, "post", lambda *a, **k: RATE_LIMITED)
+    with pytest.raises(llm.ModelUnavailable) as exc:
+        llm.generate("extract", "", "", interpret.Extraction)
+    assert str(exc.value) == "gemini-3.5-flash-lite: busy; gemini-3.8-flash: busy; mistral: busy"
+    assert exc.value.busy and not exc.value.quota
+
+
+def test_an_overload_does_not_lock_the_company_out_like_a_spent_quota(research_conn, company, model, monkeypatch):
+    monkeypatch.setenv("MISTRAL_API_KEY", "mistral-test")
+    monkeypatch.setattr(llm, "OVERLOAD_WAITS", ())
+    real = llm._gemini
+    down = {"gemini-3.5-flash-lite", "gemini-3.8-flash"}
+    monkeypatch.setattr(llm, "_gemini", lambda name, *a: (_ for _ in ()).throw(ProviderError(503, HIGH_DEMAND))
+                        if name in down else real(name, *a))
+    monkeypatch.setattr(llm.requests, "post", lambda *a, **k: RATE_LIMITED)
+    client = TestClient(main.app)
+    res = client.post("/api/research/NVDA/insights")
+    assert res.status_code == 503 and "overloaded right now" in res.json()["detail"]
+
+    monkeypatch.setattr(llm.requests, "post", lambda *a, **k: MistralResponse(429, {"message": "Monthly quota exceeded"}))
+    res = client.post("/api/research/NVDA/insights")
+    assert res.status_code == 503 and "overloaded right now" not in res.json()["detail"]  # Mistral's quota is spent
+    assert "mistral: quota" in res.json()["detail"]
+
+    # One model's spent quota among overloaded ones is not a spent quota: the next request tries again at once.
+    down.clear()
+    assert client.post("/api/research/NVDA/insights").json()["insights"]["status"] == "partial"
+
+
+def test_the_last_model_waits_out_an_overload_until_the_deadline(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("MISTRAL_API_KEY", "mistral-test")
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+
+    class Clock:
+        now = 1000.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    clock = Clock()
+    monkeypatch.setattr(llm, "time", clock)
+    attempts = []
+
+    def busy(model, *args):
+        attempts.append((model, clock.now))
+        clock.now += 1
+        raise ProviderError(503, HIGH_DEMAND)
+
+    monkeypatch.setattr(llm, "_gemini", busy)
+    mistral_at = []
+    monkeypatch.setattr(llm.requests, "post", lambda *a, **k: mistral_at.append(clock.now) or mistral_answer(extraction()))
+    deadline = clock.now + 230
+    assert llm.generate("synthesize", "", "", interpret.Extraction, deadline=deadline).model == "mistral-small-latest"
+    preferred = [t for m, t in attempts if m == "gemini-3.8-flash"]
+    fallback = [t for m, t in attempts if m == "gemini-3.5-flash-lite"]
+    assert len(preferred) == 4 and preferred[-1] - preferred[0] < 60  # its scheduled waits, then the fallback's turn
+    assert len(fallback) > 4 and fallback[-1] > deadline - 90  # kept trying well past its scheduled waits
+    assert deadline - mistral_at[0] >= llm.MISTRAL_RESERVE_SECONDS - 1
