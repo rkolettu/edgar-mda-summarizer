@@ -57,6 +57,20 @@ def test_groq_quota_falls_back_to_mistral_and_never_gemini(research_conn, compan
     assert fake_gemini.calls == []
 
 
+def test_a_rate_limit_reads_as_quota_but_an_overload_does_not(research_conn, company, providers, monkeypatch):
+    def failing(error):
+        monkeypatch.setattr(llm, "_openai_chat", lambda *a: (_ for _ in ()).throw(error))
+        monkeypatch.setattr(main, "_chat_times", {})
+        return ask("What are the commitments?")
+
+    res = failing(llm.ProviderError(429, '429: {"error": {"message": "Rate limit reached for tokens per minute"}}'))
+    assert res.status_code == 429 and "quota" in res.json()["detail"]
+    res = failing(llm.ProviderError(503, "503: This model is currently experiencing high demand."))
+    assert res.status_code == 503 and "overloaded right now" in res.json()["detail"] and "quota" not in res.json()["detail"]
+    res = failing(TimeoutError("The read operation timed out"))
+    assert res.status_code == 503 and "timed out" in res.json()["detail"]
+
+
 def test_chat_limits_and_configuration(research_conn, company, providers, monkeypatch):
     assert ask("x" * 501).status_code == 422
     monkeypatch.setattr(main, "CHAT_PER_MINUTE", 2)
