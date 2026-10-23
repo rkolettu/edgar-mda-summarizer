@@ -577,7 +577,8 @@ def save_changes(conn: psycopg.Connection, company_id: int, records: list) -> No
 
 
 def recent_quota_failure(conn: psycopg.Connection, company_id: int, minutes: int) -> bool:
-    """A model stage for the company failed on quota recently (so a page reload should not retry at once)."""
+    """A model stage for the company failed recently because every model was out of quota (so a page reload should not
+    retry at once). A failure where only some models were, or that was an overload, does not count."""
     return conn.execute(
         """
         SELECT EXISTS (
@@ -585,5 +586,5 @@ def recent_quota_failure(conn: psycopg.Connection, company_id: int, minutes: int
             WHERE f.company_id = %s AND r.status = 'failed' AND r.error LIKE %s
               AND r.finished_at > now() - make_interval(mins => %s))
         """,
-        (company_id, "%quota%", minutes),
+        (company_id, "quota spent: %", minutes),  # llm.QUOTA_SPENT starts such a failure's message
     ).fetchone()[0]

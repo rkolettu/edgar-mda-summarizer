@@ -6,8 +6,10 @@ runs on Flash. A spent quota, a model the project cannot use (Google limits 2.5 
 them), an overloaded model or malformed output moves on to the next model in the stage's chain; Mistral's free tier
 is the last resort when MISTRAL_API_KEY is set. Callers never see a provider error, only a Result or ModelUnavailable.
 
-Every call has a timeout. A web request also passes a deadline: no attempt starts that could not finish by then, and a
-model that is not the last in the chain leaves time for the next one.
+Every call has a timeout. A web request also passes a deadline: no attempt starts that could not finish by then, a
+model that is not the last in the chain leaves time for the next one, and the last keeps waiting out an overload until
+the deadline. Failures are labelled for what they are: "busy" (Google's high-demand 503s, a per-minute rate limit) passes
+in seconds or minutes; only "quota" (a spent daily or monthly allowance) stops a company's retries for a while.
 """
 
 from __future__ import annotations
@@ -33,9 +35,11 @@ MAX_OUTPUT_TOKENS = 16_384
 # Under high demand Gemini can hold a request for minutes before answering (an omission check once took 156s to return
 # 190 tokens), so a call is abandoned only after this long.
 CALL_TIMEOUT_SECONDS = 300
-# Under a deadline, a model with another behind it in the chain leaves the next one this long, and no attempt starts
+# Under a deadline, a Gemini model with another behind it leaves the next one this long (Flash-Lite once took 123s to
+# write a summary under load), one with only Mistral behind it leaves MISTRAL_RESERVE_SECONDS, and no attempt starts
 # with less than MIN_ATTEMPT_SECONDS to run.
-FALLBACK_RESERVE_SECONDS = 60
+FALLBACK_RESERVE_SECONDS = 100
+MISTRAL_RESERVE_SECONDS = 30
 MIN_ATTEMPT_SECONDS = 20
 MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions"
 MISTRAL_TIMEOUT = 180
@@ -43,15 +47,30 @@ UNAVAILABLE_MARKERS = ("not found", "not supported", "permission", "limiting acc
 # Google answers 503 "experiencing high demand" in spikes that often last more than a few seconds: the same model is
 # tried again after these waits before the stage falls back to a smaller one.
 OVERLOAD_WAITS = (5, 15, 30)
-OVERLOAD_MARKERS = ("high demand", "overloaded", "try again later")
+OVERLOAD_MARKERS = ("high demand", "overloaded", "try again later", "capacity exceeded", "rate limit")
+# A 429 that names one of these is a spent allowance rather than a rate limit (Gemini's per-minute limit also says
+# "quota", so it is recognized by its quota id first).
+QUOTA_MARKERS = ("quota", "per day", "perday", "month", "billing")
+# Failures that pass on their own: the page can simply try again later.
+TRANSIENT = ("busy", "timed out", "out of time")
+# A failure where every model was out of quota starts with this, so the backoff recognizes it.
+QUOTA_SPENT = "quota spent: "
 
 
 class ModelUnavailable(Exception):
-    """No model in the stage's chain answered; `quota` is true when every failure was a spent quota."""
+    """No model in the stage's chain answered; `quota` is true when every failure was a spent quota, `busy` when
+    every failure was an overload, a rate limit or a timeout."""
 
-    def __init__(self, message: str, quota: bool):
+    def __init__(self, message: str, quota: bool, busy: bool = False):
         super().__init__(message)
         self.quota = quota
+        self.busy = busy
+
+
+class ProviderError(Exception):
+    def __init__(self, code: int, message: str):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass
@@ -72,9 +91,14 @@ def preferred(stage: str) -> str:
 
 
 def _overloaded(exc: Exception) -> bool:
-    if getattr(exc, "code", None) == 429 or analysis.is_usage_limit_error(exc):
-        return False  # a spent quota does not come back in seconds
-    return getattr(exc, "code", None) in (500, 502, 503) or any(m in str(exc).lower() for m in OVERLOAD_MARKERS)
+    """An overload or a rate limit, which passes in seconds or minutes; a spent daily or monthly quota does not."""
+    code = getattr(exc, "code", None)
+    message = str(exc).lower()
+    if code == 429:
+        return "perminute" in message.replace(" ", "") or not any(m in message for m in QUOTA_MARKERS)
+    if analysis.is_usage_limit_error(exc):
+        return False
+    return code in (500, 502, 503) or any(m in message for m in OVERLOAD_MARKERS)
 
 
 def _budget(deadline: float | None, reserve: float = 0, wait: float = 0) -> float | None:
@@ -85,17 +109,19 @@ def _budget(deadline: float | None, reserve: float = 0, wait: float = 0) -> floa
     return min(CALL_TIMEOUT_SECONDS, left) if left >= MIN_ATTEMPT_SECONDS else None
 
 
-def _gemini_retrying(model: str, stage: str, system: str, contents: str, schema: type[BaseModel],
-                     deadline: float | None, reserve: float) -> Result:
-    for wait in (*OVERLOAD_WAITS, None):
+def _retrying(name: str, stage: str, call, deadline: float | None, reserve: float, persist: bool = False) -> Result:
+    """call(timeout) with an overload or rate limit waited out OVERLOAD_WAITS. With persist (the last model under a
+    deadline) it keeps waiting until the deadline, since Google's high-demand spikes can outlast those waits."""
+    waits = iter(OVERLOAD_WAITS)
+    while True:
         try:
-            return _gemini(model, stage, system, contents, schema, _budget(deadline, reserve) or MIN_ATTEMPT_SECONDS)
+            return call(_budget(deadline, reserve) or MIN_ATTEMPT_SECONDS)
         except Exception as exc:  # noqa: BLE001 - only an overload is retried; anything else goes to the caller
+            wait = next(waits, OVERLOAD_WAITS[-1] if persist and deadline is not None and OVERLOAD_WAITS else None)
             if wait is None or not _overloaded(exc) or _budget(deadline, reserve, wait) is None:
                 raise
-            print(f"research model {model} overloaded for {stage}; retrying in {wait}s", flush=True)
+            print(f"research model {name} busy for {stage}; retrying in {wait}s", flush=True)
             time.sleep(wait)
-    raise AssertionError("unreachable")
 
 
 def chain(stage: str) -> list[str]:
@@ -107,17 +133,16 @@ def chain(stage: str) -> list[str]:
 
 
 def _kind(exc: Exception) -> str:
-    if analysis.is_usage_limit_error(exc):
-        return "quota"
     if isinstance(exc, (json.JSONDecodeError, ValidationError, TypeError)):
         return "malformed output"
     code = getattr(exc, "code", None)
-    message = str(exc).lower()
     if isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower() or code in (408, 504):
         return "timed out"
-    if code == 429:
+    if _overloaded(exc):
+        return "busy"
+    if code == 429 or analysis.is_usage_limit_error(exc):
         return "quota"
-    if code in (400, 403, 404, 500, 502, 503) or any(marker in message for marker in UNAVAILABLE_MARKERS):
+    if code in (400, 403, 404, 500, 502, 503) or any(marker in str(exc).lower() for marker in UNAVAILABLE_MARKERS):
         return "unavailable"
     return "error"
 
@@ -157,9 +182,10 @@ def _mistral(system: str, contents: str, schema: type[BaseModel], timeout: float
         },
         timeout=timeout,
     )
-    if response.status_code == 429:
-        raise ModelUnavailable("mistral: quota", quota=True)
-    response.raise_for_status()
+    if response.status_code >= 400:
+        # Mistral's free tier answers 429 for its rate limit (about one request a second) and when its shared capacity
+        # is full, not only for a spent monthly allowance; _kind tells them apart by the message.
+        raise ProviderError(response.status_code, f"{response.status_code}: {response.text[:300]}")
     body = response.json()
     usage = body.get("usage") or {}
     data = schema.model_validate(json.loads(body["choices"][0]["message"]["content"]))
@@ -174,35 +200,31 @@ def generate(stage: str, system: str, contents: str, schema: type[BaseModel], pr
     failures: list[tuple[str, str]] = []
     mistral = bool(os.environ.get("MISTRAL_API_KEY")) and not preferred_only
     models = (chain(stage)[:1] if preferred_only else chain(stage)) if os.environ.get("GEMINI_API_KEY") else []
-    for n, model in enumerate(models):
-        reserve = FALLBACK_RESERVE_SECONDS if n < len(models) - 1 or mistral else 0
+    attempts = [(model, lambda t, m=model: _gemini(m, stage, system, contents, schema, t)) for model in models]
+    if mistral:
+        attempts.append(("mistral", lambda t: _mistral(system, contents, schema, min(t, MISTRAL_TIMEOUT))))
+    for n, (name, call) in enumerate(attempts):
+        following = [later for later, _ in attempts[n + 1:]]
+        reserve = 0 if not following else MISTRAL_RESERVE_SECONDS if following == ["mistral"] else FALLBACK_RESERVE_SECONDS
         if _budget(deadline, reserve) is None:
-            failures.append((model, "out of time"))
+            failures.append((name, "out of time"))
             continue
+        # The last Gemini model keeps waiting out an overload until the deadline, less Mistral's reserve.
+        persist = name != "mistral" and following in ([], ["mistral"])
         try:
-            result = _gemini_retrying(model, stage, system, contents, schema, deadline, reserve)
+            result = _retrying(name, stage, call, deadline, reserve, persist)
         except Exception as exc:  # noqa: BLE001 - every failure moves to the next model
-            failures.append((model, _kind(exc)))
-            print(f"research model {model} failed for {stage}: {_kind(exc)}: {str(exc)[:200]}", flush=True)
+            failures.append((name, _kind(exc)))
+            print(f"research model {name} failed for {stage}: {_kind(exc)}: {str(exc)[:200]}", flush=True)
             continue
         _log(stage, schema, result)
         return result
-    if mistral and _budget(deadline) is None:
-        failures.append(("mistral", "out of time"))
-    elif mistral:
-        try:
-            result = _mistral(system, contents, schema, min(_budget(deadline), MISTRAL_TIMEOUT))
-        except ModelUnavailable:
-            failures.append(("mistral", "quota"))
-        except Exception as exc:  # noqa: BLE001
-            failures.append(("mistral", _kind(exc)))
-        else:
-            _log(stage, schema, result)
-            return result
     if not failures:
         raise ModelUnavailable("No model is configured (set GEMINI_API_KEY).", quota=False)
-    summary = "; ".join(f"{model}: {kind}" for model, kind in failures)
-    raise ModelUnavailable(summary, quota=all(kind == "quota" for _, kind in failures))
+    summary = "; ".join(f"{name}: {kind}" for name, kind in failures)
+    quota = all(kind == "quota" for _, kind in failures)
+    raise ModelUnavailable(QUOTA_SPENT + summary if quota else summary, quota=quota,
+                           busy=all(kind in TRANSIENT for _, kind in failures))
 
 
 # --- conversational replies (the filing chat) ---
@@ -219,12 +241,6 @@ class Reply:
     model: str
     input_tokens: int | None
     output_tokens: int | None
-
-
-class ProviderError(Exception):
-    def __init__(self, code: int, message: str):
-        super().__init__(message)
-        self.code = code
 
 
 def chat_configured() -> bool:
@@ -272,7 +288,8 @@ def reply(system: str, prompt: str) -> Reply:
             continue
         print(f"chat model={result.model} input={result.input_tokens} output={result.output_tokens}", flush=True)
         return result
-    raise ModelUnavailable("; ".join(f"{n}: {k}" for (n, _), k in zip(attempts, failures)), quota=all(k == "quota" for k in failures))
+    raise ModelUnavailable("; ".join(f"{n}: {k}" for (n, _), k in zip(attempts, failures)), quota=all(k == "quota" for k in failures),
+                           busy=all(k in TRANSIENT for k in failures))
 
 
 def _log(stage: str, schema: type[BaseModel], result: Result) -> None:
