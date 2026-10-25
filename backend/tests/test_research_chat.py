@@ -1,8 +1,10 @@
+from contextlib import nullcontext
+
 import pytest
 from fastapi.testclient import TestClient
 
 import main
-from research import chat, ingest, llm, store
+from research import chat, db, ingest, llm, service, store
 from tests.test_research_snapshot import company_sec  # noqa: F401 - fixture
 
 
@@ -57,18 +59,44 @@ def test_groq_quota_falls_back_to_mistral_and_never_gemini(research_conn, compan
     assert fake_gemini.calls == []
 
 
-def test_a_rate_limit_reads_as_quota_but_an_overload_does_not(research_conn, company, providers, monkeypatch):
-    def failing(error):
-        monkeypatch.setattr(llm, "_openai_chat", lambda *a: (_ for _ in ()).throw(error))
-        monkeypatch.setattr(main, "_chat_times", {})
-        return ask("What are the commitments?")
+@pytest.mark.parametrize("groq_enabled", [False, True], ids=["mistral-only", "groq-and-mistral"])
+@pytest.mark.parametrize("error,status,detail", [
+    (llm.ProviderError(429, "Rate limit reached for tokens per minute"), 429, "quota"),
+    (llm.ProviderError(429, "Requests rate limit exceeded; try again later"), 429, "quota"),
+    (llm.ProviderError(429, "Monthly quota exceeded"), 429, "quota"),
+    (llm.ProviderError(429, "Service tier capacity exceeded for this model."), 503, "overloaded right now"),
+    (llm.ProviderError(429, "This model is currently experiencing high demand."), 503, "overloaded right now"),
+    (llm.ProviderError(429, "This model is overloaded."), 503, "overloaded right now"),
+    (llm.ProviderError(503, "This model is currently experiencing high demand."), 503, "overloaded right now"),
+    (TimeoutError("The read operation timed out"), 503, "timed out"),
+])
+def test_a_rate_limit_reads_as_quota_but_an_overload_does_not(
+        providers, monkeypatch, groq_enabled, error, status, detail):
+    # Isolate storage and context building; exercise the real provider chain and HTTP error mapping.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(db, "connect", lambda: nullcontext(None))
+    monkeypatch.setattr(service, "_resolve", lambda *a: ({"company_id": 1}, None))
+    monkeypatch.setattr(store, "load_snapshot", lambda *a: {"payload": {}})
+    monkeypatch.setattr(chat, "answer", lambda *a: llm.reply("system", "question"))
+    if not groq_enabled:
+        monkeypatch.delenv("GROQ_API_KEY")
+    monkeypatch.setattr(llm, "_openai_chat", lambda *a: (_ for _ in ()).throw(error))
+    res = ask("What are the commitments?")
+    assert res.status_code == status
+    assert detail in res.json()["detail"]
+    if status == 503:
+        assert "quota" not in res.json()["detail"]
 
-    res = failing(llm.ProviderError(429, '429: {"error": {"message": "Rate limit reached for tokens per minute"}}'))
-    assert res.status_code == 429 and "quota" in res.json()["detail"]
-    res = failing(llm.ProviderError(503, "503: This model is currently experiencing high demand."))
-    assert res.status_code == 503 and "overloaded right now" in res.json()["detail"] and "quota" not in res.json()["detail"]
-    res = failing(TimeoutError("The read operation timed out"))
-    assert res.status_code == 503 and "timed out" in res.json()["detail"]
+
+def test_groq_rate_limits_and_mistral_capacity_do_not_mean_all_quota(providers, monkeypatch):
+    def failing(url, *args):
+        message = "Rate limit reached" if url == llm.GROQ_URL else "Service tier capacity exceeded for this model."
+        raise llm.ProviderError(429, message)
+
+    monkeypatch.setattr(llm, "_openai_chat", failing)
+    with pytest.raises(llm.ModelUnavailable) as exc:
+        llm.reply("system", "question")
+    assert exc.value.busy and not exc.value.quota
 
 
 def test_chat_limits_and_configuration(research_conn, company, providers, monkeypatch):
