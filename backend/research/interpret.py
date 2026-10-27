@@ -15,7 +15,7 @@ Outputs are stored once (model_outputs) and merged into the snapshot, so viewing
 from __future__ import annotations
 
 import re
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 
 import psycopg
@@ -31,6 +31,9 @@ from research.rows import fiscal_label, money
 EXTRACT_VERSION = 1
 SYNTH_VERSION = 1
 AUDIT_VERSION = 1
+# Neon can suspend an idle compute while a model is retrying. Keep queries on the calling thread, outside the
+# model workers and write transactions, so both successful outputs and failed stages can still be recorded.
+DATABASE_HEARTBEAT_SECONDS = 60
 
 LIMITS = {
     "business": 30_000,
@@ -533,6 +536,17 @@ class Busy(Exception):
     """Another worker is running a stage this request needs."""
 
 
+def _model_result(conn: psycopg.Connection, future: Future) -> llm.Result:
+    while not wait((future,), timeout=DATABASE_HEARTBEAT_SECONDS)[0]:
+        conn.execute("SELECT 1")
+    return future.result()
+
+
+def _generate(conn: psycopg.Connection, *args, **kwargs) -> llm.Result:
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return _model_result(conn, pool.submit(llm.generate, *args, **kwargs))
+
+
 def run(conn: psycopg.Connection, company_id: int, force: bool = False, upgrade: bool = False, step: bool = False,
         deadline: float | None = None) -> bool:
     """Runs the stages the company is missing. Returns True when anything new was produced.
@@ -580,7 +594,7 @@ def run(conn: psycopg.Connection, company_id: int, force: bool = False, upgrade:
             failure = None
             for job, future in futures:
                 try:
-                    result = future.result()
+                    result = _model_result(conn, future)
                     output = verify_extraction(result.data, job.text, [r for r in rows if r["filing_id"] == job.filing["filing_id"]])
                     with conn.transaction():
                         _save(conn, company_id, job.filing["filing_id"], "extract", EXTRACT_VERSION, result.model, len(job.text),
@@ -614,8 +628,8 @@ def run(conn: psycopg.Connection, company_id: int, force: bool = False, upgrade:
             extractions = [(f, outputs[(f["filing_id"], "extract")]["output"]) for f in chosen
                            if (f["filing_id"], "extract") in outputs]
             source = synthesis_input(payload, extractions)
-            result = llm.generate("synthesize", SYNTH_PROMPT, source.text, Synthesis, preferred_only=upgrading,
-                                  deadline=deadline)
+            result = _generate(conn, "synthesize", SYNTH_PROMPT, source.text, Synthesis, preferred_only=upgrading,
+                               deadline=deadline)
             output = verify_synthesis(result.data, source, payload)
             with conn.transaction():
                 _save(conn, company_id, latest["filing_id"], "synthesize", SYNTH_VERSION, result.model, len(source.text), output)
@@ -694,8 +708,8 @@ def _run_audit(conn: psycopg.Connection, company_id: int, filings: list[dict], c
         model, tokens, text = "none", (None, None), ""
         if open_items:
             text = audit.audit_input(payload, synth, open_items)
-            result = llm.generate("audit", audit.AUDIT_PROMPT, text, audit.Audit, preferred_only=preferred_only,
-                                  deadline=deadline)
+            result = _generate(conn, "audit", audit.AUDIT_PROMPT, text, audit.Audit, preferred_only=preferred_only,
+                               deadline=deadline)
             output = audit.verify(result.data, text, payload, synth, items)
             model, tokens = result.model, (result.input_tokens, result.output_tokens)
         else:
