@@ -140,6 +140,7 @@ def generate_insights(query: str) -> dict:
 
 
 CHAT_QUOTA_MESSAGE = "The chat's free AI quota is used up for the moment; try again in a minute."
+CHAT_BUSY_MESSAGE = "The chat's AI models are overloaded right now ({}); try again in a minute."
 
 
 def ask(query: str, question: str, history: list[dict]) -> dict:
@@ -156,6 +157,8 @@ def ask(query: str, question: str, history: list[dict]) -> dict:
         except chat.InvalidQuestion as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except llm.ModelUnavailable as exc:
-            if exc.quota or exc.busy:
+            if exc.quota:
                 raise HTTPException(status_code=429, detail=CHAT_QUOTA_MESSAGE) from exc
+            if exc.busy:
+                raise HTTPException(status_code=503, detail=CHAT_BUSY_MESSAGE.format(exc)) from exc
             raise HTTPException(status_code=503, detail=f"The filing chat is unavailable ({exc}).") from exc

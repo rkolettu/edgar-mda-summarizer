@@ -47,7 +47,8 @@ UNAVAILABLE_MARKERS = ("not found", "not supported", "permission", "limiting acc
 # Google answers 503 "experiencing high demand" in spikes that often last more than a few seconds: the same model is
 # tried again after these waits before the stage falls back to a smaller one.
 OVERLOAD_WAITS = (5, 15, 30)
-OVERLOAD_MARKERS = ("high demand", "overloaded", "try again later", "capacity exceeded", "rate limit")
+CAPACITY_MARKERS = ("high demand", "overloaded", "capacity exceeded")
+OVERLOAD_MARKERS = (*CAPACITY_MARKERS, "try again later", "rate limit")
 # A 429 that names one of these is a spent allowance rather than a rate limit (Gemini's per-minute limit also says
 # "quota", so it is recognized by its quota id first).
 QUOTA_MARKERS = ("quota", "per day", "perday", "month", "billing")
@@ -278,17 +279,21 @@ def reply(system: str, prompt: str) -> Reply:
         attempts.append((f"mistral:{model}", lambda: _openai_chat(MISTRAL_URL, os.environ["MISTRAL_API_KEY"], model, system, prompt)))
     if not attempts:
         raise ModelUnavailable("No chat model is configured (set GROQ_API_KEY or MISTRAL_API_KEY).", quota=False)
-    failures = []
+    failures, refused = [], []
     for name, call in attempts:
         try:
             result = call()
         except Exception as exc:  # noqa: BLE001 - every failure moves to the next model
             failures.append(_kind(exc))
+            # Providers also use 429 for shared-capacity overloads, which are not a spent quota or a rate limit.
+            refused.append(failures[-1] == "quota" or (
+                getattr(exc, "code", None) == 429 and not any(m in str(exc).lower() for m in CAPACITY_MARKERS)))
             print(f"chat model {name} failed: {_kind(exc)}: {str(exc)[:200]}", flush=True)
             continue
         print(f"chat model={result.model} input={result.input_tokens} output={result.output_tokens}", flush=True)
         return result
-    raise ModelUnavailable("; ".join(f"{n}: {k}" for (n, _), k in zip(attempts, failures)), quota=all(k == "quota" for k in failures),
+    # For a question asked again in a minute, a rate limit is as good as a spent quota; an overload or a timeout is not.
+    raise ModelUnavailable("; ".join(f"{n}: {k}" for (n, _), k in zip(attempts, failures)), quota=all(refused),
                            busy=all(k in TRANSIENT for k in failures))
 
 
