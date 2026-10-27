@@ -349,6 +349,7 @@ export default function App() {
         {loading && (
           <LoadingState
             ticker={activeQuery}
+            ai={writingInsights || summary.status === 'loading'}
             message={research.status === 'loading' ? RESEARCH_LOADING : writingInsights ? INSIGHTS_LOADING : undefined}
             step={writingInsights ? insightsStep(research.data.insights) : undefined}
           />

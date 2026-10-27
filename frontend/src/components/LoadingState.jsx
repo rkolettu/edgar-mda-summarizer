@@ -21,7 +21,7 @@ function SkeletonSection() {
 
 const SUMMARY_MESSAGE = 'A first-time analysis can take a few minutes. This uses my Gemini API key; if its usage limit is reached, please try again in about 3 hours.'
 
-export default function LoadingState({ ticker, message = SUMMARY_MESSAGE, step }) {
+export default function LoadingState({ ticker, message = SUMMARY_MESSAGE, step, ai = false }) {
   const [elapsed, setElapsed] = useState(0)
   useEffect(() => {
     const id = setInterval(() => setElapsed((e) => e + 1), 1000)
@@ -34,6 +34,14 @@ export default function LoadingState({ ticker, message = SUMMARY_MESSAGE, step }
         <p className="mb-4 text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">Research in progress / {ticker}</p>
         <h1 className="text-3xl font-semibold tracking-[-0.05em] text-ink sm:text-4xl">Reading the filing.</h1>
         <p className="mt-3 text-sm leading-relaxed text-ink-2">{message}</p>
+        {ai && (
+          <p className="mt-4 rounded-xl border border-line bg-panel px-4 py-3 text-xs leading-relaxed text-ink-2">
+            <span className="font-semibold text-ink">A note on wait times: </span>
+            Gemini may be busy during periods of high demand. AI analysis can take several minutes or occasionally
+            time out while the app waits for a response. If it times out, completed work is kept; please try again
+            in a few minutes.
+          </p>
+        )}
         <div className="loading-rule mt-6 h-1 w-full max-w-sm overflow-hidden rounded-full bg-line" aria-hidden="true" />
         <p className="mt-3 font-mono text-xs text-muted">{step && `${step} · `}{elapsed}s elapsed</p>
       </div>
